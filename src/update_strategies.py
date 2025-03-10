@@ -21,7 +21,14 @@ class DynamicsUpdateStrategy(UpdateStrategy):
             rand_index = torch.randint(0, network.num_neurons, (1,)).item()
             epsp = torch.dot(network.weights[rand_index], network.state)
             threshold = network.constrict * (torch.sum(network.state) - network.num_neurons * network.fraction_active) / network.num_neurons
-            index_activation = (1 - network.syn_fail) * epsp + network.spon_rel - threshold
+            dx = abs(rand_index - network.I_dir)
+            dx = min(dx, network.num_neurons - dx)
+            ext = 0
+            if dx < network.field_width*network.num_neurons:
+                ext = network.I_str * torch.exp(torch.tensor(-network.I_str * dx, dtype=torch.float32,
+                                               device=network.device))
+            
+            index_activation = (1 - network.syn_fail) * epsp + network.spon_rel - threshold +ext
 
             network.activations.append(index_activation.item())
             network.total_activity.append(torch.sum(network.state).item())

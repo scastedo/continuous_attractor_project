@@ -318,6 +318,20 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
         plt.grid(True, linestyle='--', alpha=0.6)
         pdf.savefig(fig3)
         plt.close(fig3)
+
+        # Plot 4: Tuning Curves (if available)
+        if network.tuning_curves:
+            fig4 = plt.figure(figsize=(12, 5))
+            for key, values in network.tuning_curves.items():
+                plt.plot(values.cpu().numpy(), label=f"Tuning Curve {key.cpu().numpy()}")
+            plt.title("Tuning Curves")
+            plt.xlabel("Direction")
+            plt.ylabel("Activity")
+            plt.legend()
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.tight_layout()
+            pdf.savefig(fig4)
+            plt.close(fig4)
         
     return str(output_file)
 

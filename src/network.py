@@ -58,6 +58,7 @@ class CANNetwork(nn.Module):
         self.variances: List[float] = []
         self.total_activity: List[float] = []
         self.state_history: List[torch.Tensor] = []
+        self.tuning_curves: dict = {}
 
     def initialize_weights(self) -> None:
         """
@@ -78,7 +79,12 @@ class CANNetwork(nn.Module):
         """
         self.state = torch.zeros(self.num_neurons, dtype=torch.float32, device=self.device)
         num_active = int(self.fraction_active * self.num_neurons)
-        active_indices = torch.randperm(self.num_neurons, device=self.device)[:num_active]
+        # active_indices = torch.randperm(self.num_neurons, device=self.device)[:num_active]
+        #Random index but all together
+        start_index = torch.randint(0, self.num_neurons - num_active + 1, (1,),
+                                     device=self.device).item()
+        active_indices = torch.arange(start_index, start_index + num_active,
+                                       device=self.device) % self.num_neurons
         self.state[active_indices] = 1.0
 
     def calculate_energy(self) -> torch.Tensor:
@@ -88,12 +94,21 @@ class CANNetwork(nn.Module):
         Returns:
             torch.Tensor: The calculated energy.
         """
+        # Do I need a threshold term for metroplis?
         main_term = -0.5 * (1 - self.syn_fail) * torch.dot(self.state, torch.mv(self.weights, self.state))
         spontaneous_term = -torch.sum(self.state) * self.spon_rel
-        Iext_term = -torch.sum(self.state) * (self.I_str ** 2) * (
-            1 - torch.exp(torch.tensor(-self.I_str * self.field_width * self.num_neurons, 
-                                         dtype=torch.float32, device=self.device))
-        )
+        
+        indices = torch.arange(self.num_neurons, device=self.device, dtype=torch.float32)
+        dist = torch.abs(indices - self.I_dir)
+        dist = torch.min(dist, self.num_neurons - dist)
+        sigma = self.field_width * self.num_neurons  # Adjust as appropriate
+        I_ext = self.I_str * torch.exp(-dist**2 / (2 * sigma**2))
+        Iext_term = -torch.dot(self.state, I_ext)
+        
+        # Iext_term = -torch.sum(self.state) * (self.I_str ** 2) * (
+        #     1 - torch.exp(torch.tensor(-self.I_str * self.field_width * self.num_neurons, 
+        #                                  dtype=torch.float32, device=self.device))
+        # )
         return main_term + spontaneous_term + Iext_term
 
     def record_energy(self) -> None:
