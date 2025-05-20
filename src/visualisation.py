@@ -332,6 +332,45 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
             plt.tight_layout()
             pdf.savefig(fig4)
             plt.close(fig4)
+        # Plot 5: Correlations
+        if len(network.correlations)>0:
+            fig5 = plt.figure(figsize=(10, 7))
+            correlations_array = network.correlations
+            plt.hist(correlations_array, bins=20, color='skyblue', edgecolor='black')
+            plt.grid(True, linestyle='--', alpha=0.6)
+            mean_corr = np.nanmean(correlations_array)
+            plt.axvline(mean_corr, color='red', linestyle='--', label=f"Mean Correlation: {mean_corr:.2f}")
+            plt.text(mean_corr, 0, f"{mean_corr:.2f}", color='red', ha='right', va='bottom')
+            plt.xlabel("Correlation Coefficient")
+            plt.title(f"Network Correlation, Mean = {mean_corr:.2f}")
+
+            plt.ylabel("Frequency")
+            pdf.savefig(fig5)
+            plt.close(fig5)
+        #Print Table with parameters values:
+        # "num_neurons": 100,
+        # "noise": 0.01, #above 0.01 is too much
+        # "field_width": 0.05,
+        # "syn_fail": 0.3,
+        # "spon_rel": 0.05,
+        # "constrict": 1.0,
+        # "fraction_active": 0.1,
+        fig6 = plt.figure(figsize=(10, 7))
+        plt.text(0.5, 0.5, f"Network Parameters:\n\n"
+                            f"Number of Neurons: {network.num_neurons}\n"
+                            f"Noise: {network.noise}\n"
+                            f"Field Width: {network.field_width}\n"
+                            f"Synaptic Failure: {network.syn_fail}\n"
+                            f"Spontaneous Release: {network.spon_rel}\n"
+                            f"Constriction: {network.constrict}\n"
+                            f"Fraction Active: {network.fraction_active}\n",
+                    horizontalalignment='center',
+                    verticalalignment='center',
+                    fontsize=12) 
+        plt.axis('off')
+        pdf.savefig(fig6)
+        plt.close(fig6)
+
         
     return str(output_file)
 

@@ -19,16 +19,23 @@ class DynamicsUpdateStrategy(UpdateStrategy):
         for _ in range(network.num_updates):
             # Randomly choose a neuron to update.
             rand_index = torch.randint(0, network.num_neurons, (1,)).item()
-            epsp = torch.dot(network.weights[rand_index], network.state)
-            threshold = network.constrict * (torch.sum(network.state) - network.num_neurons * network.fraction_active) / network.num_neurons
-            dx = abs(rand_index - network.I_dir)
+            random_fail = torch.tensor(np.random.choice([0, 1], p=[network.syn_fail, 1-network.syn_fail], size=network.num_neurons), device=network.device, dtype=torch.float32)
+            dynamic_weights = network.weights[rand_index]*random_fail
+            epsp = torch.dot(dynamic_weights, network.state)
+            
+            
+            dx = abs(rand_index - network.I_dir[network.generation])
             dx = min(dx, network.num_neurons - dx)
-            ext = 0
-            if dx < network.field_width*network.num_neurons:
-                ext = network.I_str * torch.exp(torch.tensor(-network.I_str * dx, dtype=torch.float32,
+            sigma = network.field_width* network.num_neurons
+            ext = network.I_str[network.generation] * torch.exp(torch.tensor(-dx**2/(2*sigma**2), dtype=torch.float32,
                                                device=network.device))
             
-            index_activation = (1 - network.syn_fail) * epsp + network.spon_rel - threshold +ext
+        
+            threshold = network.constrict * (torch.sum(network.state) - network.num_neurons * 
+                                             network.fraction_active) / network.num_neurons
+            
+            
+            index_activation = epsp + network.spon_rel+ext - threshold*network.syn_fail
 
             network.activations.append(index_activation.item())
             network.total_activity.append(torch.sum(network.state).item())
@@ -40,7 +47,8 @@ class DynamicsUpdateStrategy(UpdateStrategy):
                 elif index_activation > 0:
                     network.state[rand_index] = 1.0
                 else:
-                    network.state[rand_index] = torch.tensor(np.random.choice([0.0, 1.0]), device=network.device)
+                    network.state[rand_index] = torch.tensor(np.random.choice([0.0, 1.0]),
+                                                              device=network.device)
             else:
                 # Stochastic update using a sigmoid probability.
                 prob = 1 / (1 + torch.exp(-index_activation / network.noise))

@@ -15,8 +15,8 @@ class CANNetwork(nn.Module):
                  spon_rel: float,
                  constrict: float,
                  fraction_active: float,
-                 I_str: float,
-                 I_dir: int,
+                 I_str: List[float],
+                 I_dir: List[float],
                  num_updates: int,
                  device: Optional[torch.device] = None):
         """
@@ -30,8 +30,8 @@ class CANNetwork(nn.Module):
             spon_rel (float): Spontaneous release parameter.
             constrict (float): Constriction scaling factor.
             fraction_active (float): Fraction of neurons active.
-            I_str (float): Stimulus strength.
-            I_dir (int): Directional stimulus index.
+            I_str (array): Stimulus strength.
+            I_dir (array): Directional stimulus index.
             num_updates (int): Number of updates per simulation step.
             device (Optional[torch.device]): Device to run computations.
         """
@@ -47,6 +47,7 @@ class CANNetwork(nn.Module):
         self.I_str = I_str
         self.I_dir = I_dir
         self.num_updates = num_updates
+        self.generation = 0
 
         self.weights = torch.zeros((num_neurons, num_neurons), dtype=torch.float32, device=self.device)
         self.state: Optional[torch.Tensor] = None
@@ -59,6 +60,7 @@ class CANNetwork(nn.Module):
         self.total_activity: List[float] = []
         self.state_history: List[torch.Tensor] = []
         self.tuning_curves: dict = {}
+        self.correlations: List[float] = []
 
     def initialize_weights(self) -> None:
         """
@@ -71,6 +73,8 @@ class CANNetwork(nn.Module):
         diff = torch.min(diff, self.num_neurons - diff)
         threshold = self.field_width * self.num_neurons / 2
         self.weights = (diff <= threshold).float() / self.num_neurons
+        # Inhibitory connections make negative or by enforcing an average fraction of active in dynamics
+        # self.weights = self.weights - 1*(diff > threshold).float()/self.num_neurons
         self.weights.fill_diagonal_(0)
 
     def initialize_state(self) -> None:
@@ -95,14 +99,19 @@ class CANNetwork(nn.Module):
             torch.Tensor: The calculated energy.
         """
         # Do I need a threshold term for metroplis?
-        main_term = -0.5 * (1 - self.syn_fail) * torch.dot(self.state, torch.mv(self.weights, self.state))
+        # do i need  to make symmetric?
+        fail_matrix = torch.tensor(np.random.choice([0, 1], p=[self.syn_fail, 1-self.syn_fail], size=(self.num_neurons, self.num_neurons)), device=self.device, dtype=torch.float32)
+        symmetric_fail_matrix = (fail_matrix + fail_matrix.t()) / 2
+        dynamic_weights = self.weights * symmetric_fail_matrix
+        
+        main_term = -0.5 * (1 - self.syn_fail) * torch.dot(self.state, torch.mv(dynamic_weights, self.state))
         spontaneous_term = -torch.sum(self.state) * self.spon_rel
         
         indices = torch.arange(self.num_neurons, device=self.device, dtype=torch.float32)
-        dist = torch.abs(indices - self.I_dir)
+        dist = torch.abs(indices - self.I_dir[self.generation])
         dist = torch.min(dist, self.num_neurons - dist)
         sigma = self.field_width * self.num_neurons  # Adjust as appropriate
-        I_ext = self.I_str * torch.exp(-dist**2 / (2 * sigma**2))
+        I_ext = self.I_str[self.generation] * torch.exp(-dist**2 / (2 * sigma**2))
         Iext_term = -torch.dot(self.state, I_ext)
         
         # Iext_term = -torch.sum(self.state) * (self.I_str ** 2) * (
@@ -117,6 +126,26 @@ class CANNetwork(nn.Module):
         """
         energy = self.calculate_energy().item()
         self.lyapunov.append(energy)
+
+    def record_correlations(self) -> None:
+        """
+        record the noise correlation between the neurons in the network defined as the pearson correlation coefficient
+        """
+        # Calculate the mean of the state
+        entire_state = torch.stack(self.state_history) +1e-10#gens x num_neurons
+        
+        # mean_state = torch.mean(entire_state, dim=0)
+        # print(mean_state.shape)
+        # state_centered = entire_state - mean_state
+        # covariance_matrix = torch.mm(state_centered.t(), state_centered) / (entire_state.shape[0] - 1)
+        # std_devs = torch.sqrt(torch.diag(covariance_matrix))
+        # correlation_matrix = covariance_matrix / torch.ger(std_devs, std_devs)
+        # corr_vals = correlation_matrix[torch.triu_indices(correlation_matrix.size(0), correlation_matrix.size(1), offset=1)]
+        corr_matrix = torch.corrcoef(torch.transpose(entire_state,0,1))
+        upper_triangle_indices = torch.triu_indices(self.num_neurons,self.num_neurons, offset=1)
+        upper_triangle_values = corr_matrix[upper_triangle_indices[0,:], upper_triangle_indices[1,:]]
+        self.correlations = upper_triangle_values.tolist()
+
 
     def locate_centre(self) -> None:
         """

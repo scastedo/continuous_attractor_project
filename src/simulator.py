@@ -37,8 +37,10 @@ def simulate(
                 network.record_energy()
                 network.locate_centre()
             network.state_history.append(network.state.clone())
+            network.generation += 1
+        network.record_correlations()
         final_network = network
-
+        
     return final_network
 
 def simulate_tuning_curve(
@@ -68,8 +70,7 @@ def simulate_tuning_curve(
     network.initialize_weights()
     for run in range(runs):
         logging.info(f"Starting run {run+1} of {runs}")
-        network.I_dir = I_dir_values[run]
-
+        network.I_dir = I_dir_values[run].repeat(num_generations)
         network.initialize_state()
         network.record_energy()
         for gen in range(1, num_generations):
