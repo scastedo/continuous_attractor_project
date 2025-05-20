@@ -47,6 +47,7 @@ def simulate_tuning_curve(
         network_params: dict,
         num_generations: int,
         runs: int,
+        angles: int,
         update_strategy: UpdateStrategy) -> CANNetwork:
     """
     Run the CANN network simulation to generate tuning curves.
@@ -65,11 +66,14 @@ def simulate_tuning_curve(
     
     final_network = None
     # Define directional input over different runs
-    I_dir_values = torch.linspace(0, network_params['num_neurons'] , runs)
+
+    # I_dir_values = torch.linspace(0, network_params['num_neurons'] , runs)
+    # instead make it do 10 times at same direction and over 12 different directions
+    I_dir_values = torch.linspace(0, network_params['num_neurons'] , angles).repeat(runs)
     network = CANNetwork(device=device, **network_params)
     network.initialize_weights()
-    for run in range(runs):
-        logging.info(f"Starting run {run+1} of {runs}")
+    for run in range(runs* angles):
+        logging.info(f"Starting run {run+1} of {runs*angles}")
         network.I_dir = I_dir_values[run].repeat(num_generations)
         network.initialize_state()
         network.record_energy()

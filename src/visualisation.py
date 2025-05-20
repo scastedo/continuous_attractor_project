@@ -374,6 +374,57 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
         
     return str(output_file)
 
+def save_tuning_data(network: CANNetwork, generations:int, number_angles, number_trials: int, output_dir: str = "reports") -> None:
+    """
+    Save the full network state history (all times, runs, and trials) to a file,
+    along with a reshaped version for easier analysis.
+    
+    Args:
+        network: The CANNetwork instance containing simulation data
+        number_angles: Number of angles/directions used in the simulation
+        number_trials: Number of trials/runs per angle
+        output_dir: Directory to save the state data
+    """
+    # Create output directory if it doesn't exist
+    Path(output_dir).mkdir(exist_ok=True)
+    
+    # Generate timestamp for the filename
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_file = Path(output_dir) / f"state_history_{timestamp}.npz"
+    
+    # Convert state_history to numpy array
+    if isinstance(network.state_history, torch.Tensor):
+        state_np = network.state_history.cpu().numpy()
+    else:
+        state_np = torch.stack([torch.as_tensor(s) for s in network.state_history]).cpu().numpy()
+    
+    # Calculate length of each run
+    length_run = generations -1 #len(network.state_history) // (number_angles * number_trials)
+    
+    # Reshape the state history for easier analysis
+    reshaped_state = np.zeros((length_run, number_angles, number_trials, state_np.shape[1]))
+    
+    for i in range(number_angles * number_trials):
+        dat = state_np[i * length_run:(i + 1) * length_run, :]
+        reshaped_state[:, i % number_angles, i // number_angles, :] = dat
+    
+    # Extract the last timepoint data and transpose for easy neuron-wise analysis
+    last_timepoint_data = reshaped_state[-1, :, :, :]
+    neuron_first_view = last_timepoint_data.transpose(2, 0, 1)  # Shape: (n_neurons, number_angles, number_trials)
+    
+    # Save all versions of the data
+    np.savez_compressed(
+        output_file, 
+        state_history=state_np,
+        neuron_centric=neuron_first_view,
+        metadata=np.array([length_run,number_angles, number_trials])
+    )
+    print(f"Full state history saved to {output_file} with the following arrays:")
+    print(f" - 'state_history': raw data, shape {state_np.shape}")
+    print(f" - 'neuron_centric': (neurons, angles, trials), shape {neuron_first_view.shape}")
+    print(f" - 'metadata': [length_run,number_angles, number_trials]")
+
+
 # Keep the original visualization functions for backward compatibility
 def plot_lyapunov(network: CANNetwork) -> None:
     """Plot the Lyapunov energy over simulation generations."""
