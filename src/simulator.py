@@ -2,6 +2,8 @@ import torch
 import logging
 from src.network import CANNetwork
 from src.update_strategies import UpdateStrategy
+torch.backends.cudnn.benchmark = True
+
 
 def simulate(
         network_params: dict,
@@ -69,7 +71,7 @@ def simulate_tuning_curve(
 
     # I_dir_values = torch.linspace(0, network_params['num_neurons'] , runs)
     # instead make it do 10 times at same direction and over 12 different directions
-    I_dir_values = torch.linspace(0, network_params['num_neurons'] , angles).repeat(runs)
+    I_dir_values = torch.linspace(0, network_params['num_neurons']-angles, angles).repeat(runs)
     network = CANNetwork(device=device, **network_params)
     network.initialize_weights()
     for run in range(runs* angles):
@@ -85,4 +87,41 @@ def simulate_tuning_curve(
             network.state_history.append(network.state.clone())
         network.tuning_curves[I_dir_values[run]] = network.state
         final_network = network
+    return final_network
+
+
+
+def simulate_tuning_curve_parallel(
+        network_params: dict,
+        num_generations: int,
+        I_dir_val: int,
+        update_strategy: UpdateStrategy) -> CANNetwork:
+    """
+    Run the CANN network simulation to generate tuning curves.
+
+    Args:
+        network_params (dict): Parameters for network initialization.
+        num_generations (int): Number of simulation generations.
+        runs (int): Number of independent runs.
+        update_strategy (UpdateStrategy): Strategy used for updating network state.
+
+    Returns:
+        CANNetwork: The final network instance after simulation.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")    
+    network = CANNetwork(device=device, **network_params)
+    network.initialize_weights()
+    network.initialize_state()
+    network.record_energy()
+    network.I_dir = torch.tensor(I_dir_val).repeat(num_generations) 
+
+    for gen in range(1, num_generations):
+        for _ in range(network.num_neurons):
+            update_strategy.update(network)
+            network.record_energy()
+            network.locate_centre()
+        network.state_history.append(network.state.clone())
+        network.generation += 1
+    # network.record_correlations()
+    final_network = network
     return final_network
