@@ -370,6 +370,39 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
         plt.axis('off')
         pdf.savefig(fig6)
         plt.close(fig6)
+        # Plot tuning curve of dynamics, where find the average on rate per neuron.
+        # The plot should be probability on the y axis and x axis should be neuron index (average over all time starting after 10 generations)
+        fig7 = plt.figure(figsize=(10, 7))
+        state_history = torch.stack(network.state_history).cpu().numpy()
+        avg_on_rate = np.mean(state_history[30:,:], axis=0)
+        # Smooth with a simple moving average; adjust window (odd preferable) to change smoothing amount
+        # window = 3
+        # kernel = np.ones(window) / window
+        # smoothed = np.convolve(avg_on_rate, kernel, mode='same')
+        plt.plot(avg_on_rate, color='purple')
+        plt.title("Average On Rate per Neuron (after 30 generations)")
+        plt.xlabel("Neuron Index")
+        plt.ylabel("Average On Rate")
+        plt.grid(True, linestyle='--', alpha=0.6)
+        pdf.savefig(fig7)
+        plt.close(fig7)
+
+
+        #Figure of histogram of covariance matrix values flattened
+        if network.covariance_matrix is not None:
+            fig8 = plt.figure(figsize=(10, 7))
+            cov_matrix = network.covariance_matrix.cpu().numpy()
+            upper_tri_indices = np.triu_indices_from(cov_matrix, k=1)
+            cov_values = cov_matrix[upper_tri_indices]
+            plt.hist(cov_values, bins=50, color='orange', edgecolor='black', density=True)
+            plt.axvline(np.mean(cov_values), color='red', linestyle='--', label=f"Mean: {np.mean(cov_values):.2f}")
+            plt.title("Histogram of Covariance Matrix Values")
+            plt.xlabel("Covariance Value")
+            plt.legend()
+            plt.ylabel("Frequency")
+            plt.grid(True, linestyle='--', alpha=0.6)
+            pdf.savefig(fig8)
+            plt.close(fig8)
 
         
     return str(output_file)

@@ -18,6 +18,9 @@ class CANNetwork(nn.Module):
                  I_str: List[float],
                  I_dir: List[float],
                  num_updates: int,
+                 noise_eta: float,
+                 input_resistance: float,
+                 ampar_conductance: float,
                  device: Optional[torch.device] = None):
         """
         Initialize the CAN network.
@@ -48,11 +51,15 @@ class CANNetwork(nn.Module):
         self.I_dir = I_dir
         self.num_updates = num_updates
         self.generation = 0
+        self.noise_eta = noise_eta
+        self.input_resistance = input_resistance
+        self.ampar_conductance = ampar_conductance
 
         self.weights = torch.zeros((num_neurons, num_neurons), dtype=torch.float32, device=self.device)
         self.state: Optional[torch.Tensor] = None
 
         # History tracking lists
+        self.covariance_matrix: Optional[torch.Tensor] = None
         self.lyapunov: List[float] = []
         self.activations: List[float] = []
         self.centres: List[float] = []
@@ -179,3 +186,16 @@ class CANNetwork(nn.Module):
             update_strategy (UpdateStrategy): The update strategy to apply.
         """
         update_strategy.update(self)
+    
+    def noise_covariance(self) -> torch.Tensor:
+        """
+        Calculate the noise covariance matrix of the network states.
+
+        Returns:
+            torch.Tensor: The noise covariance matrix.
+        """
+        states = torch.stack(self.state_history)  # Shape: (num_generations, num_neurons)
+        mean_state = torch.mean(states, dim=0)
+        centered_states = states - mean_state
+        covariance_matrix = torch.mm(centered_states.t(), centered_states) / (states.shape[0] - 1) #shape: (num_neurons, num_neurons)
+        self.covariance_matrix = covariance_matrix
