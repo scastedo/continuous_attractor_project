@@ -29,7 +29,9 @@ class DynamicsUpdateStrategy(UpdateStrategy):
             sigma = network.field_width* network.num_neurons
             ext = network.I_str[network.generation] * torch.exp(torch.tensor(-dx**2/(2*sigma**2), dtype=torch.float32,
                                                device=network.device))
-            
+            # exp_arg = -dx**2 / (2 * sigma**2)
+            # exp_arg_tensor = exp_arg #torch.tensor(exp_arg, dtype=torch.float32, device=network.device)
+            # ext = network.I_str[network.generation] * torch.exp(exp_arg_tensor)
         
             threshold = network.constrict * (torch.sum(network.state) - network.num_neurons * 
                                              network.fraction_active) / network.num_neurons
