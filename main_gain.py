@@ -8,7 +8,7 @@ def main():
     logging.basicConfig(level=logging.INFO, 
                         format='%(asctime)s - %(levelname)s - %(message)s')
     
-    num_generations = 1000 # how long simulation for
+    num_generations = 300 # how long simulation for
     runs = 1 # how many angles to do
 
     # I_dir = np.zeros(num_generations)
@@ -17,24 +17,25 @@ def main():
     # I_str[:] = 0.1
 
     I_dir = np.random.normal(loc=25, scale=2, size=num_generations)
+    I_dir = np.full(num_generations, 20)  # for testing
     I_str = np.random.normal(loc=0.1, scale=0.05, size=num_generations)
     I_str = np.clip(I_str, 0,None)
 
     # Define network parameters.
     network_params = {
-        "num_neurons": 50,
-        "noise": 0.00, #0.01 for i_str 
+        "num_neurons": 90,
+        "noise": 0, #0.1, #0.01 for i_str 
         "field_width": 0.05,
         "syn_fail": 0.000,  # Amount of synaptic failure
         "spon_rel": 0.0,    # Spontaneous release rate,
-        "noise_eta": 0.05,  # Noise (temperature) parameter
+        "noise_eta": 0.15,  # Noise (temperature) parameter
         "input_resistance": 50,  # Input resistance
         "ampar_conductance": 0.3,    # AMPAR conductance
         "constrict": 1.0,   # Constriction factor... related to degree of inhibition?
         "fraction_active": 0.1,  # Fraction of neurons that are active
         "I_str": I_str,     # Strength of input....should be v small
         "I_dir": I_dir,    # Neuron index where you want input 
-        "num_updates": 10   # number of trials
+        "num_updates": 2   # number of trials
     }
     
 
