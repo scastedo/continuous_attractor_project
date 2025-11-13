@@ -332,65 +332,55 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
             plt.tight_layout()
             pdf.savefig(fig4)
             plt.close(fig4)
-        # Plot 5: Correlations
-        if len(network.correlations)>0:
-            fig5 = plt.figure(figsize=(10, 7))
-            correlations_array = network.correlations
-            plt.hist(correlations_array, bins=20, color='skyblue', edgecolor='black')
-            plt.grid(True, linestyle='--', alpha=0.6)
-            mean_corr = np.nanmean(correlations_array)
-            plt.axvline(mean_corr, color='red', linestyle='--', label=f"Mean Correlation: {mean_corr:.2f}")
-            plt.text(mean_corr, 0, f"{mean_corr:.2f}", color='red', ha='right', va='bottom')
-            plt.xlabel("Correlation Coefficient")
-            plt.title(f"Network Correlation, Mean = {mean_corr:.2f}")
-
-            plt.ylabel("Frequency")
-            pdf.savefig(fig5)
-            plt.close(fig5)
-        #Print Table with parameters values:
-        # "num_neurons": 100,
-        # "noise": 0.01, #above 0.01 is too much
-        # "field_width": 0.05,
-        # "syn_fail": 0.3,
-        # "spon_rel": 0.05,
-        # "constrict": 1.0,
-        # "fraction_active": 0.1,
-        fig6 = plt.figure(figsize=(10, 7))
+        
+        fig7 = plt.figure(figsize=(10, 7))
         plt.text(0.5, 0.5, f"Network Parameters:\n\n"
                             f"Number of Neurons: {network.num_neurons}\n"
-                            f"Noise: {network.noise}\n"
-                            f"Field Width: {network.field_width}\n"
+                            f"Noise: {network.sigma_temp}\n"
+                            f"Field Width: {network.sigma_input}\n"
                             f"Synaptic Failure: {network.syn_fail}\n"
                             f"Spontaneous Release: {network.spon_rel}\n"
                             f"Constriction: {network.constrict}\n"
-                            f"Fraction Active: {network.fraction_active}\n",
+                            f"Fraction Active: {network.threshold_active_fraction}\n"
+                            f"AMPA Conductance: {network.ampar_conductance}\n"
+                            f"Input Resistance: {network.input_resistance}\n",
                     horizontalalignment='center',
                     verticalalignment='center',
                     fontsize=12) 
         plt.axis('off')
-        pdf.savefig(fig6)
-        plt.close(fig6)
-        # Plot tuning curve of dynamics, where find the average on rate per neuron.
-        # The plot should be probability on the y axis and x axis should be neuron index (average over all time starting after 10 generations)
-        fig7 = plt.figure(figsize=(10, 7))
-        state_history = torch.stack(network.state_history).cpu().numpy()
-        avg_on_rate = np.mean(state_history[30:,:], axis=0)
-        # Smooth with a simple moving average; adjust window (odd preferable) to change smoothing amount
-        # window = 3
-        # kernel = np.ones(window) / window
-        # smoothed = np.convolve(avg_on_rate, kernel, mode='same')
-        plt.plot(avg_on_rate, color='purple')
-        plt.title("Average On Rate per Neuron (after 30 generations)")
-        plt.xlabel("Neuron Index")
-        plt.ylabel("Average On Rate")
-        plt.grid(True, linestyle='--', alpha=0.6)
         pdf.savefig(fig7)
         plt.close(fig7)
 
+        # Plot tuning curve of dynamics, where find the average on rate per neuron.
+        fig8 = plt.figure(figsize=(10, 7))
+        state_history = torch.stack(network.state_history).cpu().numpy()
+        avg_on_rate = np.mean(state_history[30:,:], axis=0)
+        #calculate width of curve at half max
+        half_max = np.max(avg_on_rate) / 2
+        indices_above_half = np.where(avg_on_rate >= half_max)[0]
+        hwhm = (indices_above_half[-1] - indices_above_half[0]) / 2
+        plt.plot(avg_on_rate, color='purple')
+        plt.title(f"Average On Rate per Neuron (after 30 generations), HWHM: {hwhm:.4f} neurons")
+        plt.xlabel("Neuron Index")
+        plt.ylabel("Average On Rate")
+        plt.grid(True, linestyle='--', alpha=0.6)
+        pdf.savefig(fig8)
+        plt.close(fig8)
 
-        #Figure of histogram of covariance matrix values flattened
+  
+        if network.input_fluctuations is not None and len(network.input_fluctuations)>0:
+            fig10 = plt.figure(figsize=(10, 7))
+            plt.plot(network.input_fluctuations, color='brown')
+            plt.title("Input Fluctuations Over Generations")
+            plt.xlabel("Generation")
+            plt.ylabel("Input Fluctuation (A value)")
+            plt.grid(True, linestyle='--', alpha=0.6)
+            pdf.savefig(fig10)
+            plt.close(fig10)
+
+                  #Figure of histogram of covariance matrix values flattened
         if network.covariance_matrix is not None:
-            fig8 = plt.figure(figsize=(10, 7))
+            fig9 = plt.figure(figsize=(10, 7))
             cov_matrix = network.covariance_matrix.cpu().numpy()
             upper_tri_indices = np.triu_indices_from(cov_matrix, k=1)
             cov_values = cov_matrix[upper_tri_indices]
@@ -401,8 +391,50 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
             plt.legend()
             plt.ylabel("Frequency")
             plt.grid(True, linestyle='--', alpha=0.6)
-            pdf.savefig(fig8)
-            plt.close(fig8)
+            pdf.savefig(fig9)
+            plt.close(fig9)
+        
+        fig11 = plt.figure(figsize=(10, 7))
+        evals, evecs = np.linalg.eigh(cov_matrix)
+        plt.hist(evals, density=True, color='teal', bins = network.num_neurons//3)
+        plt.axvline(np.mean(evals), color='red', linestyle='--', label=f"Mean Eigenvalue: {np.mean(evals):.5f}")
+        #print participation ratio
+        pr = (np.sum(evals)**2) / np.sum(evals**2)
+        plt.title(f"Eigenvalues of Covariance Matrix (Participation Ratio: {pr:.4f}, Mean: {np.mean(evals):.5f})")
+        plt.xlabel("Eigenvalue")
+        plt.ylabel("Density")
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.6)
+        pdf.savefig(fig11)
+        plt.close(fig11)
+        # correlation matrix histogram
+        fig12 = plt.figure(figsize=(10, 7))
+        diag = np.sqrt(np.diag(cov_matrix))
+        corr_matrix = cov_matrix / np.outer(diag, diag)
+        upper_tri_indices = np.triu_indices_from(corr_matrix, k=1)
+        corr_values = corr_matrix[upper_tri_indices]
+        plt.hist(corr_values, bins=50, color='cyan', edgecolor='black', density=True)
+        plt.axvline(np.mean(corr_values), color='red', linestyle='--', label=f"Mean: {np.mean(corr_values):.5f}")
+        plt.title("Histogram of Correlation Matrix Values")
+        plt.xlabel("Correlation Value")
+        plt.legend()
+        plt.ylabel("Frequency")
+        plt.grid(True, linestyle='--', alpha=0.6)
+        pdf.savefig(fig12)
+        plt.close(fig12)
+        # evals of correlation matrix
+        fig13 = plt.figure(figsize=(10, 7))
+        corr_evals, corr_evecs = np.linalg.eigh(corr_matrix)
+        plt.hist(corr_evals, density=True, color='magenta', bins = network.num_neurons//3)
+        plt.axvline(np.mean(corr_evals), color='red', linestyle='--', label=f"Mean Eigenvalue: {np.mean(corr_evals):.5f}")
+        plt.title(f"Eigenvalues of Correlation Matrix (Mean: {np.mean(corr_evals):.5f})")
+        plt.xlabel("Eigenvalue")
+        plt.ylabel("Density")
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.6)
+        pdf.savefig(fig13)
+        plt.close(fig13)
+
 
         
     return str(output_file)
@@ -557,3 +589,28 @@ def view_interactive_report(network: CANNetwork, output_dir: str = "reports") ->
     
     # Automatically open in default browser
     webbrowser.open(f"file://{Path(report_path).absolute()}")
+def save_state_history(network: CANNetwork, outdir: Path) -> Path:
+    """
+    Persist the simulated states (and optional covariance) for later analysis.
+
+    Args:
+        network: finished CANNetwork instance.
+        outdir: folder to write artifacts into.
+
+    Returns:
+        Path to the saved NumPy file.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    if not network.state_history:
+        raise ValueError("network.state_history is empty; run the simulator first.")
+
+    states = torch.stack(network.state_history).cpu().numpy()
+    state_path = outdir / "state_history.npy"
+    np.save(state_path, states)
+
+    if hasattr(network, "covariance_matrix"):
+        torch.save(network.covariance_matrix.cpu(), outdir / "covariance.pt")
+
+    return state_path

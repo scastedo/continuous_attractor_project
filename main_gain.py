@@ -1,56 +1,136 @@
-#!/usr/bin/env cann
+#!/usr/bin/env python3
 import logging
+import argparse
+import itertools
+import os
+from pathlib import Path
+import random
 from src import simulator, visualisation, update_strategies
-import numpy as np
 
-def main():
-    # Configure logging.
-    logging.basicConfig(level=logging.INFO, 
-                        format='%(asctime)s - %(levelname)s - %(message)s')
-    
-    num_generations = 300 # how long simulation for
-    runs = 1 # how many angles to do
 
-    # I_dir = np.zeros(num_generations)
-    # I_dir[:] = 20
-    # I_str = np.zeros(num_generations)
-    # I_str[:] = 0.1
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Run CAN network with CLI-overridable parameters.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument("--N", "--num-neurons", dest="num_neurons", type=int, default=150,
+                   help="Number of neurons")
+    p.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=5000,
+                   help="Simulation length (generations)")
+    # Allow one or many values; we’ll run all combinations.
+    p.add_argument("--ampar", "--ampar-conductance", dest="ampar_vals",
+                   type=float, nargs="+", default=[1],
+                   help="AMPAR conductance value(s)")
+    p.add_argument("--rin", "--input-resistance", dest="rin_vals",
+                   type=float, nargs="+", default=[1],
+                   help="Input resistance value(s)")
+    p.add_argument("--idir", "--input-direction", dest="input_direction", type=float, nargs="+", default=[0.5],
+                   help="Input direction (neuron index fraction)")
+    p.add_argument("--tag", type=str, default="",
+                   help="Optional run tag appended to output folders/files")
+    p.add_argument("--outdir", type=Path, default=Path("runs_overnight"),
+                   help="Base output directory (if your visualisation supports it)")
+    p.add_argument("--loglevel", default="INFO", choices=["DEBUG","INFO","WARNING","ERROR","CRITICAL"],
+                   help="Logging level")
+    p.add_argument("--trials", type=int, default=1,
+                   help="How many independent repeats to run per parameter combo.")
+  
+    return p.parse_args()
 
-    I_dir = np.random.normal(loc=25, scale=2, size=num_generations)
-    I_dir = np.full(num_generations, 20)  # for testing
-    I_str = np.random.normal(loc=0.1, scale=0.05, size=num_generations)
-    I_str = np.clip(I_str, 0,None)
 
-    # Define network parameters.
-    network_params = {
-        "num_neurons": 90,
-        "noise": 0, #0.1, #0.01 for i_str 
-        "field_width": 0.05,
-        "syn_fail": 0.000,  # Amount of synaptic failure
-        "spon_rel": 0.0,    # Spontaneous release rate,
-        "noise_eta": 0.15,  # Noise (temperature) parameter
-        "input_resistance": 50,  # Input resistance
-        "ampar_conductance": 0.3,    # AMPAR conductance
-        "constrict": 1.0,   # Constriction factor... related to degree of inhibition?
-        "fraction_active": 0.1,  # Fraction of neurons that are active
-        "I_str": I_str,     # Strength of input....should be v small
-        "I_dir": I_dir,    # Neuron index where you want input 
-        "num_updates": 2   # number of trials
+def make_network_params(num_neurons, rin, ampar, idir):
+    return {
+        "num_neurons": num_neurons,
+        "sigma_temp": 0.000,
+
+        "sigma_input": 0.05,   # width of x input gaussian bump. Indep of N
+        "I_str": 0.1,          # strength of input
+        "I_dir": idir,          # neuron index where you want input
+        "tau_ou": 500.0,
+        "sigma_ou": 0.1,
+
+        "syn_fail": 0.000,     # synaptic failure
+        "spon_rel": 0.0,       # spontaneous release rate
+        "sigma_eta": 0.1,      # noise (temperature)
+
+        "input_resistance": rin,
+        "ampar_conductance": ampar,
+
+        "constrict": 1.0,      # constriction factor (inhibition-ish)
+        "threshold_active_fraction": 0.1
     }
-    
 
-    # Select the update strategy.
+def run_condition(spec: dict) -> str:
+    logging.basicConfig(level=spec["loglevel"],
+                        format="%(asctime)s - %(levelname)s - %(message)s")
+
     update_strategy = update_strategies.DynamicsUpdateStrategyGain()
-    # update_strategy = update_strategies.MetropolisUpdateStrategy()
 
-    # Run the simulation.
-    network = simulator.simulate(network_params, num_generations, runs, update_strategy)
+    network_params = make_network_params(
+        spec["num_neurons"], spec["rin"], spec["ampar"], spec["idir"]
+    )
+
+    total_gens = spec["num_generations"]
+    run_id = f"g{spec['ampar']:.3f}_rin{spec['rin']:.3f}_idir{spec['idir']:.3f}"
+
+    run_id = (
+            f"g{spec['ampar']:.3f}_rin{spec['rin']:.3f}_idir{spec['idir']:.3f}"
+            f"_trial{spec['trial']:02d}"
+        )
+    if spec["tag"]:
+        run_id += f"_{spec['tag']}"
+
+
+    def log_progress(gen: int) -> None:
+        pct = 100.0 * gen / total_gens
+        logging.info("[%s] %.1f%% complete (%d/%d generations)",
+                        run_id, pct, gen, total_gens)
+    network = simulator.simulate(network_params, spec["num_generations"], update_strategy, progress_callback=log_progress)
+
+    setattr(network, "run_id", run_id)
+
     network.noise_covariance()
-    visualisation.create_visualization_report(network)
+    outdir = Path(spec["outdir"]) / run_id
+    visualisation.save_state_history(network, outdir)
 
-    # network_params["I_dir"] = np.full(num_generations, 120)
-    # network = simulator.simulate(network_params, num_generations, runs, update_strategy)
-    # visualisation.create_visualization_report(network)
+    try:
+        visualisation.create_visualization_report(network, output_dir=outdir)
+    except TypeError:
+        visualisation.create_visualization_report(network)
+
+    return run_id
+def main():
+    args = parse_args()
+    logging.basicConfig(level=getattr(logging, args.loglevel),
+                        format="%(asctime)s - %(levelname)s - %(message)s")
+    args.outdir.mkdir(parents=True, exist_ok=True)
+
+    idir_vals = (
+        args.input_direction
+        if isinstance(args.input_direction, (list, tuple))
+        else [args.input_direction]
+    )
+
+    loglevel_numeric = getattr(logging, args.loglevel)
+    specs = []
+    for ampar, rin, idir in itertools.product(args.ampar_vals, args.rin_vals, idir_vals):
+        for trial in range(args.trials):
+            specs.append({
+                "ampar": ampar,
+                "rin": rin,
+                "idir": idir,
+                "trial": trial,
+                "num_neurons": args.num_neurons,
+                "num_generations": args.num_generations,
+                "tag": args.tag,
+                "outdir": str(args.outdir),
+                "loglevel": loglevel_numeric,
+            })
+
+    for spec in specs:
+        run_condition(spec)
+
+
 
 if __name__ == "__main__":
     main()

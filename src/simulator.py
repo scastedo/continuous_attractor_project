@@ -1,3 +1,5 @@
+from collections.abc import Callable
+from typing import Optional
 import torch
 import logging
 from src.network import CANNetwork
@@ -8,8 +10,8 @@ torch.backends.cudnn.benchmark = True
 def simulate(
         network_params: dict,
         num_generations: int,
-        runs: int,
-        update_strategy: UpdateStrategy) -> CANNetwork:
+        update_strategy: UpdateStrategy,
+        progress_callback: Optional[Callable[[int], None]] = None) -> CANNetwork:
     """
     Run the CANN network simulation.
 
@@ -25,25 +27,29 @@ def simulate(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Running on device: {device}")
     
-    final_network = None
-    for run in range(runs):
-        logging.info(f"Starting run {run+1} of {runs}")
-        network = CANNetwork(device=device, **network_params)
-        network.initialize_weights()
-        network.initialize_state()
+    network = CANNetwork(device=device, **network_params)
+    network.initialize_weights()
+    network.initialize_state()
+    network.record_energy()
+    
+    for gen in range(1, num_generations):
+        if progress_callback and gen % 100 == 0:
+            progress_callback(gen)
+        with torch.no_grad():
+            eps = torch.randn((), device=network.device)
+            network.A = network.A_mu + network.A_rho * (network.A - network.A_mu) + network.A_sigma * eps
+            network.A.clamp_(min=0.0)
+        network.A_fixed =  float(network.A.item())  # 0-D tensor on device, won’t change this gen
+        network.input_fluctuations.append(network.A_fixed)
+        for _ in range(2*network.num_neurons):
+            update_strategy.update(network)
+        
+        network.total_activity.append(torch.sum(network.state).item())
         network.record_energy()
-        
-        for gen in range(1, num_generations):
-            for _ in range(network.num_neurons):
-                update_strategy.update(network)
-                network.record_energy()
-                network.locate_centre()
-            network.state_history.append(network.state.clone())
-            network.generation += 1
-        network.record_correlations()
-        final_network = network
-        
-    return final_network
+        network.locate_centre()
+        network.state_history.append(network.state.clone())
+        network.generation += 1
+    return network
 
 def simulate_tuning_curve(
         network_params: dict,
