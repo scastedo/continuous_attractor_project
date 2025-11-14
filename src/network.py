@@ -60,7 +60,7 @@ class CANNetwork(nn.Module):
         self.weights = torch.zeros((num_neurons, num_neurons), dtype=torch.float32, device=self.device)
         self.state: Optional[torch.Tensor] = None
         self.synaptic_drive: Optional[torch.Tensor] = None
-        self.active_count: Optional[int] = None
+        self.active_count_tensor = torch.tensor(0.0, device=self.device)
 
         # History tracking lists
         self.lyapunov: List[float] = []
@@ -72,19 +72,26 @@ class CANNetwork(nn.Module):
         self.correlations: List[float] = []
         self.input_fluctuations: List[float] = []
         self.variances: List[float] = []
+        self.record_diagnostics = False
 
 
         self.A_mu   = torch.tensor(self.I_str, device=self.device)   # mean amplitude
         self.A_rho  = torch.exp(torch.tensor(-1.0/self.tau_ou, device=self.device))
         self.A_sigma= self.sigma_ou * torch.sqrt(1 - self.A_rho**2)
         self.A      = self.A_mu.clone()                        # state
-        self.A_fixed = 0.0
         # Optional: precompute a LUT for the Gaussian over ring distances (faster)
-        N = self.num_neurons
-        sigma_idx = self.sigma_input * N                        # width in *index* units
-        d0 = torch.arange(0, (N//2)+1, device=self.device, dtype=torch.float32)
+        sigma_idx = self.sigma_input * self.num_neurons                        # width in *index* units
+        d0 = torch.arange(0, (self.num_neurons//2)+1, device=self.device, dtype=torch.float32)
         self.bump_LUT = torch.exp(-0.5 * (d0 / sigma_idx)**2)  # size ≈ N/2+1
-
+        self.num_neurons_tensor = torch.tensor(self.num_neurons, device=self.device, dtype=torch.long)
+        self.center_index_tensor = torch.tensor(int(self.I_dir * self.num_neurons), device=self.device, dtype=torch.long)
+        distances = torch.arange(self.num_neurons, device=self.device, dtype=torch.long)
+        distances = torch.abs(distances - self.center_index_tensor)
+        distances = torch.minimum(distances, self.num_neurons_tensor - distances)
+        self.distance_to_center = distances
+        self.input_bump_profile = self.bump_LUT[distances]
+        self.target_active_tensor = torch.tensor(self.threshold_active_fraction * self.num_neurons, device=self.device)
+        self.inv_num_neurons_tensor = torch.tensor(1.0 / self.num_neurons, device=self.device)
 
     def initialize_weights(self) -> None:
         """
@@ -126,6 +133,7 @@ class CANNetwork(nn.Module):
         active_indices = torch.arange(start_index, start_index + num_active,
                                        device=self.device) % self.num_neurons
         self.state[active_indices] = 1.0
+        self.active_count_tensor = self.state.sum()
 
     def calculate_energy(self) -> torch.Tensor:
         """
@@ -141,7 +149,7 @@ class CANNetwork(nn.Module):
         idx = torch.arange(self.num_neurons, device=self.device)
         dx = torch.abs(idx - center)
         dx = torch.min(dx, self.num_neurons - dx).long()
-        Iext_term = -torch.dot(self.state, self.A_fixed * self.bump_LUT[dx])
+        Iext_term = -torch.dot(self.state, self.A * self.bump_LUT[dx])
 
         inhibition = 0.5 * self.constrict / self.num_neurons * (torch.sum(self.state) - self.num_neurons * self.threshold_active_fraction)**2
 
@@ -178,14 +186,16 @@ class CANNetwork(nn.Module):
         norm_factor = (((self.threshold_active_fraction * self.num_neurons) ** 2 - 1) / 12) if (((self.threshold_active_fraction * self.num_neurons) ** 2 - 1) != 0) else 1
         self.variances.append(diff_mean / norm_factor)
 
-    def update_state(self, update_strategy: "UpdateStrategy") -> None:
+    def update_state(self, update_strategy: "UpdateStrategy",
+                     rand_index: Optional[torch.Tensor] = None,
+                     neuron_noise: Optional[torch.Tensor] = None) -> None:
         """
         Update the network state using a provided update strategy.
 
         Args:
             update_strategy (UpdateStrategy): The update strategy to apply.
         """
-        update_strategy.update(self)
+        update_strategy.update(self, rand_index=rand_index, neuron_noise=neuron_noise)
     
     def noise_covariance(self) -> torch.Tensor:
         """
@@ -204,4 +214,3 @@ class CANNetwork(nn.Module):
         centered = states - states.mean(dim=0, keepdim=True)
         cov = centered.T @ centered / (states.size(0) - 1)
         self.covariance_matrix = cov  # stays as torch.Tensor
-

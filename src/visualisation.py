@@ -281,43 +281,43 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
         pdf.savefig(fig1)
         plt.close(fig1)
         
-        # Plot 2: Metrics (Combined)
-        fig2, axes = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
+        # # Plot 2: Metrics (Combined)
+        # fig2, axes = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
         
-        # Center of activity
-        axes[0].plot(network.centres, color='blue')
-        axes[0].set_title("Centre of Active Neurons")
-        axes[0].set_ylabel("Centre Position")
-        axes[0].grid(True, linestyle='--', alpha=0.6)
+        # # Center of activity
+        # axes[0].plot(network.centres, color='blue')
+        # axes[0].set_title("Centre of Active Neurons")
+        # axes[0].set_ylabel("Centre Position")
+        # axes[0].grid(True, linestyle='--', alpha=0.6)
         
-        # Variance
-        axes[1].plot(network.variances, color='green')
-        axes[1].set_title("Variance of Activity")
-        axes[1].set_ylabel("Variance")
-        axes[1].grid(True, linestyle='--', alpha=0.6)
+        # # Variance
+        # axes[1].plot(network.variances, color='green')
+        # axes[1].set_title("Variance of Activity")
+        # axes[1].set_ylabel("Variance")
+        # axes[1].grid(True, linestyle='--', alpha=0.6)
         
-        # Total activity
-        axes[2].plot(network.total_activity, color='red')
-        axes[2].set_title("Total Network Activity")
-        axes[2].set_xlabel("Generation")
-        axes[2].set_ylabel("Activity Level")
-        axes[2].grid(True, linestyle='--', alpha=0.6)
+        # # Total activity
+        # axes[2].plot(network.total_activity, color='red')
+        # axes[2].set_title("Total Network Activity")
+        # axes[2].set_xlabel("Generation")
+        # axes[2].set_ylabel("Activity Level")
+        # axes[2].grid(True, linestyle='--', alpha=0.6)
         
-        plt.tight_layout()
-        pdf.savefig(fig2)
-        plt.close(fig2)
+        # plt.tight_layout()
+        # pdf.savefig(fig2)
+        # plt.close(fig2)
         
-        # Plot 3: Lyapunov Energy
-        fig3 = plt.figure(figsize=(10, 7))
-        generations = np.arange(len(network.lyapunov))
-        plt.scatter(generations, network.lyapunov, s=1, color='red')
-        plt.plot(generations, network.lyapunov, alpha=0.5, color='firebrick')
-        plt.xlabel("Generation")
-        plt.ylabel("Energy")
-        plt.title("Network Lyapunov Energy over Generations")
-        plt.grid(True, linestyle='--', alpha=0.6)
-        pdf.savefig(fig3)
-        plt.close(fig3)
+        # # Plot 3: Lyapunov Energy
+        # fig3 = plt.figure(figsize=(10, 7))
+        # generations = np.arange(len(network.lyapunov))
+        # plt.scatter(generations, network.lyapunov, s=1, color='red')
+        # plt.plot(generations, network.lyapunov, alpha=0.5, color='firebrick')
+        # plt.xlabel("Generation")
+        # plt.ylabel("Energy")
+        # plt.title("Network Lyapunov Energy over Generations")
+        # plt.grid(True, linestyle='--', alpha=0.6)
+        # pdf.savefig(fig3)
+        # plt.close(fig3)
 
         # Plot 4: Tuning Curves (if available)
         if network.tuning_curves:
@@ -368,15 +368,15 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
         plt.close(fig8)
 
   
-        if network.input_fluctuations is not None and len(network.input_fluctuations)>0:
-            fig10 = plt.figure(figsize=(10, 7))
-            plt.plot(network.input_fluctuations, color='brown')
-            plt.title("Input Fluctuations Over Generations")
-            plt.xlabel("Generation")
-            plt.ylabel("Input Fluctuation (A value)")
-            plt.grid(True, linestyle='--', alpha=0.6)
-            pdf.savefig(fig10)
-            plt.close(fig10)
+        # if network.input_fluctuations is not None and len(network.input_fluctuations)>0:
+        #     fig10 = plt.figure(figsize=(10, 7))
+        #     plt.plot(network.input_fluctuations, color='brown')
+        #     plt.title("Input Fluctuations Over Generations")
+        #     plt.xlabel("Generation")
+        #     plt.ylabel("Input Fluctuation (A value)")
+        #     plt.grid(True, linestyle='--', alpha=0.6)
+        #     pdf.savefig(fig10)
+        #     plt.close(fig10)
 
                   #Figure of histogram of covariance matrix values flattened
         if network.covariance_matrix is not None:
@@ -407,33 +407,33 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
         plt.grid(True, linestyle='--', alpha=0.6)
         pdf.savefig(fig11)
         plt.close(fig11)
-        # correlation matrix histogram
-        fig12 = plt.figure(figsize=(10, 7))
-        diag = np.sqrt(np.diag(cov_matrix))
-        corr_matrix = cov_matrix / np.outer(diag, diag)
-        upper_tri_indices = np.triu_indices_from(corr_matrix, k=1)
-        corr_values = corr_matrix[upper_tri_indices]
-        plt.hist(corr_values, bins=50, color='cyan', edgecolor='black', density=True)
-        plt.axvline(np.mean(corr_values), color='red', linestyle='--', label=f"Mean: {np.mean(corr_values):.5f}")
-        plt.title("Histogram of Correlation Matrix Values")
-        plt.xlabel("Correlation Value")
-        plt.legend()
-        plt.ylabel("Frequency")
-        plt.grid(True, linestyle='--', alpha=0.6)
-        pdf.savefig(fig12)
-        plt.close(fig12)
-        # evals of correlation matrix
-        fig13 = plt.figure(figsize=(10, 7))
-        corr_evals, corr_evecs = np.linalg.eigh(corr_matrix)
-        plt.hist(corr_evals, density=True, color='magenta', bins = network.num_neurons//3)
-        plt.axvline(np.mean(corr_evals), color='red', linestyle='--', label=f"Mean Eigenvalue: {np.mean(corr_evals):.5f}")
-        plt.title(f"Eigenvalues of Correlation Matrix (Mean: {np.mean(corr_evals):.5f})")
-        plt.xlabel("Eigenvalue")
-        plt.ylabel("Density")
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.6)
-        pdf.savefig(fig13)
-        plt.close(fig13)
+        # # correlation matrix histogram
+        # fig12 = plt.figure(figsize=(10, 7))
+        # diag = np.sqrt(np.diag(cov_matrix))
+        # corr_matrix = cov_matrix / np.outer(diag, diag)
+        # upper_tri_indices = np.triu_indices_from(corr_matrix, k=1)
+        # corr_values = corr_matrix[upper_tri_indices]
+        # plt.hist(corr_values, bins=50, color='cyan', edgecolor='black', density=True)
+        # plt.axvline(np.mean(corr_values), color='red', linestyle='--', label=f"Mean: {np.mean(corr_values):.5f}")
+        # plt.title("Histogram of Correlation Matrix Values")
+        # plt.xlabel("Correlation Value")
+        # plt.legend()
+        # plt.ylabel("Frequency")
+        # plt.grid(True, linestyle='--', alpha=0.6)
+        # pdf.savefig(fig12)
+        # plt.close(fig12)
+        # # evals of correlation matrix
+        # fig13 = plt.figure(figsize=(10, 7))
+        # corr_evals, corr_evecs = np.linalg.eigh(corr_matrix)
+        # plt.hist(corr_evals, density=True, color='magenta', bins = network.num_neurons//3)
+        # plt.axvline(np.mean(corr_evals), color='red', linestyle='--', label=f"Mean Eigenvalue: {np.mean(corr_evals):.5f}")
+        # plt.title(f"Eigenvalues of Correlation Matrix (Mean: {np.mean(corr_evals):.5f})")
+        # plt.xlabel("Eigenvalue")
+        # plt.ylabel("Density")
+        # plt.legend()
+        # plt.grid(True, linestyle='--', alpha=0.6)
+        # pdf.savefig(fig13)
+        # plt.close(fig13)
 
 
         
