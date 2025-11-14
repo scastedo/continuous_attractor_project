@@ -40,7 +40,7 @@ class CANNetwork(nn.Module):
             device (Optional[torch.device]): Device to run computations.
         """
         super().__init__()
-        self.device = device if device is not None else torch.device("cpu")
+        self.device =torch.device("cpu")# device if device is not None else torch.device("cpu")
         self.num_neurons = num_neurons
         self.sigma_temp = sigma_temp
         self.sigma_input = sigma_input
@@ -59,6 +59,8 @@ class CANNetwork(nn.Module):
 
         self.weights = torch.zeros((num_neurons, num_neurons), dtype=torch.float32, device=self.device)
         self.state: Optional[torch.Tensor] = None
+        self.synaptic_drive: Optional[torch.Tensor] = None
+        self.active_count: Optional[int] = None
 
         # History tracking lists
         self.lyapunov: List[float] = []

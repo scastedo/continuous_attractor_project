@@ -28,7 +28,7 @@ def parse_args():
                    help="Input direction (neuron index fraction)")
     p.add_argument("--tag", type=str, default="",
                    help="Optional run tag appended to output folders/files")
-    p.add_argument("--outdir", type=Path, default=Path("runs_overnight"),
+    p.add_argument("--outdir", type=Path, default=Path("runs_novaryx_13_nov"),
                    help="Base output directory (if your visualisation supports it)")
     p.add_argument("--loglevel", default="INFO", choices=["DEBUG","INFO","WARNING","ERROR","CRITICAL"],
                    help="Logging level")
@@ -47,7 +47,7 @@ def make_network_params(num_neurons, rin, ampar, idir):
         "I_str": 0.1,          # strength of input
         "I_dir": idir,          # neuron index where you want input
         "tau_ou": 500.0,
-        "sigma_ou": 0.1,
+        "sigma_ou": 0.0,
 
         "syn_fail": 0.000,     # synaptic failure
         "spon_rel": 0.0,       # spontaneous release rate

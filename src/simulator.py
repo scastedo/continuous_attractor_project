@@ -31,22 +31,26 @@ def simulate(
     network.initialize_weights()
     network.initialize_state()
     network.record_energy()
-    
+    network.synaptic_drive = torch.mv(network.weights, network.state)
+    network.active_count = int(torch.sum(network.state).item())
+
+    # with torch.no_grad():
+    #         eps = torch.randn((), device=network.device)
+    #         network.A = network.A_mu + network.A_rho * (network.A - network.A_mu) + network.A_sigma * eps
+    #         network.A.clamp_(min=0.0)
+    network.A = network.A_mu
+    network.A_fixed =  float(network.A.item())  # 0-D tensor on device, won’t change this gen
+    network.input_fluctuations.append(network.A_fixed)
+
     for gen in range(1, num_generations):
         if progress_callback and gen % 100 == 0:
             progress_callback(gen)
-        with torch.no_grad():
-            eps = torch.randn((), device=network.device)
-            network.A = network.A_mu + network.A_rho * (network.A - network.A_mu) + network.A_sigma * eps
-            network.A.clamp_(min=0.0)
-        network.A_fixed =  float(network.A.item())  # 0-D tensor on device, won’t change this gen
-        network.input_fluctuations.append(network.A_fixed)
-        for _ in range(2*network.num_neurons):
+        for _ in range(network.num_neurons):
             update_strategy.update(network)
         
-        network.total_activity.append(torch.sum(network.state).item())
-        network.record_energy()
-        network.locate_centre()
+        # network.total_activity.append(torch.sum(network.state).item())
+        # network.record_energy()
+        # network.locate_centre()
         network.state_history.append(network.state.clone())
         network.generation += 1
     return network

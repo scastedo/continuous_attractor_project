@@ -113,8 +113,8 @@ class DynamicsUpdateStrategyGain(UpdateStrategy):
     def update(self, network: CANNetwork) -> None:
         # Randomly choose a neuron to update.
         rand_index = torch.randint(0, network.num_neurons, (1,)).item()
-        
-        epsp = torch.dot(network.weights[rand_index], network.state)
+        rand_state_value = network.state[rand_index].item()
+        epsp = network.synaptic_drive[rand_index]#torch.dot(network.weights[rand_index], network.state)
         
         # dx = abs(rand_index - network.I_dir[network.generation])
         # dx = min(dx, network.num_neurons - dx)
@@ -127,8 +127,9 @@ class DynamicsUpdateStrategyGain(UpdateStrategy):
         dx = abs(rand_index - c)
         dx = min(dx, network.num_neurons - dx)                       # ring distance in indices
         ext = network.A_fixed * network.bump_LUT[dx]                          # scalar
-        threshold = network.constrict * (torch.sum(network.state) - network.num_neurons * 
-                                            network.threshold_active_fraction) / network.num_neurons
+        # threshold = network.constrict * (torch.sum(network.state) - network.num_neurons * 
+        #                                     network.threshold_active_fraction) / network.num_neurons
+        threshold = (network.active_count - network.num_neurons * network.threshold_active_fraction) / network.num_neurons
         
         neuron_noise = torch.normal(0, network.sigma_eta, (1,), device=network.device).item()
 
@@ -148,6 +149,15 @@ class DynamicsUpdateStrategyGain(UpdateStrategy):
             else:
                 network.state[rand_index] = torch.tensor(np.random.choice([0.0, 1.0]),
                                                             device=network.device)
+            if network.state[rand_index].item() != rand_state_value:
+                # Update active count
+                if network.state[rand_index].item() == 1.0:
+                    network.active_count += 1
+                else:
+                    network.active_count -= 1
+                # Update synaptic drive
+                delta = network.state[rand_index].item() - rand_state_value
+                network.synaptic_drive += delta * network.weights[:,rand_index]
         else:
             # Stochastic update using a sigmoid probability.
             prob = 1 / (1 + torch.exp(-index_activation / network.sigma_temp))
@@ -155,3 +165,12 @@ class DynamicsUpdateStrategyGain(UpdateStrategy):
                 network.state[rand_index] = 1.0
             else:
                 network.state[rand_index] = 0.0
+            if network.state[rand_index].item() != rand_state_value:
+                # Update active count
+                if network.state[rand_index].item() == 1.0:
+                    network.active_count += 1
+                else:
+                    network.active_count -= 1
+                # Update synaptic drive
+                delta = network.state[rand_index].item() - rand_state_value
+                network.synaptic_drive += delta * network.weights[:,rand_index]
