@@ -2,6 +2,9 @@
 import argparse
 import itertools
 import logging
+import math
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -16,6 +19,8 @@ class ExperimentConfig:
     ampar_vals: Sequence[float]
     rin_vals: Sequence[float]
     input_direction: Sequence[float]
+    sigma_temp_vals: Sequence[float]
+    sigma_eta_vals: Sequence[float]
     trials: int
     outdir: Path
     tag: str
@@ -26,13 +31,21 @@ class ExperimentConfig:
         return getattr(logging, self.loglevel.upper(), logging.INFO)
 
     def iter_specs(self) -> Iterable["RunSpec"]:
-        combos = itertools.product(self.ampar_vals, self.rin_vals, self.input_direction)
-        for ampar, rin, idir in combos:
+        combos = itertools.product(
+            self.ampar_vals,
+            self.rin_vals,
+            self.input_direction,
+            self.sigma_temp_vals,
+            self.sigma_eta_vals,
+        )
+        for ampar, rin, idir, sigma_temp, sigma_eta in combos:
             for trial in range(self.trials):
                 yield RunSpec(
                     ampar=ampar,
                     rin=rin,
                     idir=idir,
+                    sigma_temp=sigma_temp,
+                    sigma_eta=sigma_eta,
                     trial=trial,
                     num_neurons=self.num_neurons,
                     num_generations=self.num_generations,
@@ -47,6 +60,8 @@ class RunSpec:
     ampar: float
     rin: float
     idir: float
+    sigma_temp: float
+    sigma_eta: float
     trial: int
     num_neurons: int
     num_generations: int
@@ -56,7 +71,7 @@ class RunSpec:
 
     @property
     def run_id(self) -> str:
-        base = f"g{self.ampar:.3f}_rin{self.rin:.3f}_idir{self.idir:.3f}_trial{self.trial:02d}"
+        base = f"g{self.ampar:.3f}_rin{self.rin:.3f}_sigmatemp{self.sigma_temp:.3f}_sigmaeta{self.sigma_eta:.3f}_idir{self.idir:.3f}_trial{self.trial:02d}"
         return f"{base}_{self.tag}" if self.tag else base
 
 
@@ -76,10 +91,14 @@ def parse_args() -> ExperimentConfig:
                         type=float, nargs="+", default=[1.0],
                         help="Input resistance value(s)")
     parser.add_argument("--idir", "--input-direction", dest="input_direction", type=float, nargs="+", default=[0.5],
-                        help="Input direction (neuron index fraction)")
+            help="Input direction (neuron index fraction)")
+    parser.add_argument("--sigma-temp", dest="sigma_temp_vals", type=float, nargs="+", default=[0.0],
+                        help="Sigma_temp value(s) to use for noise")
+    parser.add_argument("--sigma-eta", dest="sigma_eta_vals", type=float, nargs="+", default=[0.1],
+                        help="Sigma_eta value(s) to use for noise")
     parser.add_argument("--tag", type=str, default="",
                         help="Optional run tag appended to output folders/files")
-    parser.add_argument("--outdir", type=Path, default=Path("runs"),
+    parser.add_argument("--outdir", type=Path, default=Path("runs_small"),
                         help="Base output directory")
     parser.add_argument("--loglevel", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         help="Logging level")
@@ -93,6 +112,8 @@ def parse_args() -> ExperimentConfig:
         ampar_vals=tuple(args.ampar_vals),
         rin_vals=tuple(args.rin_vals),
         input_direction=tuple(args.input_direction),
+        sigma_temp_vals=tuple(args.sigma_temp_vals),
+        sigma_eta_vals=tuple(args.sigma_eta_vals),
         trials=args.trials,
         outdir=args.outdir,
         tag=args.tag,
@@ -104,15 +125,15 @@ def make_network_params(spec: RunSpec) -> dict:
     """Build the simulator kwargs for a single run."""
     return {
         "num_neurons": spec.num_neurons,
-        "sigma_temp": 0.0,
-        "sigma_input": 0.05,      # width of input Gaussian bump (fraction of N)
-        "I_str": 0.1,             # stimulus strength
-        "I_dir": spec.idir,       # neuron index fraction for the input peak
+        "sigma_temp": spec.sigma_temp,  # THIS SHOULD SCALE WITH N
+        "sigma_input": 0.05,      # width of input Gaussian bump (fraction of N) usually half of threshold_active_fraction
+        "I_str": 0.1,             # THIS SHOULD SCALE WITH N
+        "I_dir": spec.idir,      
         "tau_ou": 500.0,
         "sigma_ou": 0.0,
         "syn_fail": 0.0,
         "spon_rel": 0.0,
-        "sigma_eta": 0.1,
+        "sigma_eta": spec.sigma_eta,  # THIS SHOULD SCALE WITH N
         "input_resistance": spec.rin,
         "ampar_conductance": spec.ampar,
         "constrict": 1.0,
@@ -154,14 +175,39 @@ def run_experiment(spec: RunSpec) -> Path:
     return run_outdir
 
 
+def determine_worker_count() -> int:
+    cpu_count = os.cpu_count() or 1
+    workers = max(1, math.floor(cpu_count / 1.5))
+    return workers
+
+
 def main() -> None:
     config = parse_args()
     logging.basicConfig(level=config.loglevel_numeric,
                         format="%(asctime)s - %(levelname)s - %(message)s")
     config.outdir.mkdir(parents=True, exist_ok=True)
 
-    for spec in config.iter_specs():
-        run_experiment(spec)
+    specs = list(config.iter_specs())
+    if not specs:
+        logging.warning("No parameter combinations to run.")
+        return
+
+    workers = determine_worker_count()
+    logging.info("Running %d simulations across %d worker(s)", len(specs), workers)
+
+    if workers == 1:
+        for spec in specs:
+            run_experiment(spec)
+        return
+
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        future_to_spec = {executor.submit(run_experiment, spec): spec for spec in specs}
+        for future in as_completed(future_to_spec):
+            spec = future_to_spec[future]
+            try:
+                future.result()
+            except Exception:
+                logging.exception("Run %s failed", spec.run_id)
 
 
 if __name__ == "__main__":

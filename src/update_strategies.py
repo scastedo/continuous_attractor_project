@@ -110,7 +110,7 @@ class DynamicsUpdateStrategyGain(UpdateStrategy):
                neuron_noise: Optional[torch.Tensor] = None) -> None:
         if rand_index is None:
             rand_index = torch.randint(0, network.num_neurons, (), device=network.device, dtype=torch.long)
-        prev_value = network.state[rand_index]
+        prev_value = network.state[rand_index].clone()
         epsp = network.synaptic_drive[rand_index]
         ext = network.A * network.input_bump_profile[rand_index]
         threshold = (network.active_count_tensor - network.target_active_tensor) * network.inv_num_neurons_tensor
