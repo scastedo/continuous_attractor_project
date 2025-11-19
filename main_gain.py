@@ -80,9 +80,9 @@ def parse_args() -> ExperimentConfig:
         description="Run CAN network with CLI-overridable parameters.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--N", "--num-neurons", dest="num_neurons", type=int, default=150,
+    parser.add_argument("--N", "--num-neurons", dest="num_neurons", type=int, default=200,
                         help="Number of neurons")
-    parser.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=5000,
+    parser.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=500,
                         help="Simulation length (generations)")
     parser.add_argument("--ampar", "--ampar-conductance", dest="ampar_vals",
                         type=float, nargs="+", default=[1.0],
@@ -94,11 +94,11 @@ def parse_args() -> ExperimentConfig:
             help="Input direction (neuron index fraction)")
     parser.add_argument("--sigma-temp", dest="sigma_temp_vals", type=float, nargs="+", default=[0.0],
                         help="Sigma_temp value(s) to use for noise")
-    parser.add_argument("--sigma-eta", dest="sigma_eta_vals", type=float, nargs="+", default=[0.1],
+    parser.add_argument("--sigma-eta", dest="sigma_eta_vals", type=float, nargs="+", default=[0.0],
                         help="Sigma_eta value(s) to use for noise")
     parser.add_argument("--tag", type=str, default="",
                         help="Optional run tag appended to output folders/files")
-    parser.add_argument("--outdir", type=Path, default=Path("runs_small"),
+    parser.add_argument("--outdir", type=Path, default=Path("runs_test4"),
                         help="Base output directory")
     parser.add_argument("--loglevel", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         help="Logging level")
@@ -123,21 +123,21 @@ def parse_args() -> ExperimentConfig:
 
 def make_network_params(spec: RunSpec) -> dict:
     """Build the simulator kwargs for a single run."""
+    threshold = 0.1
+
     return {
         "num_neurons": spec.num_neurons,
-        "sigma_temp": spec.sigma_temp,  # THIS SHOULD SCALE WITH N
-        "sigma_input": 0.05,      # width of input Gaussian bump (fraction of N) usually half of threshold_active_fraction
-        "I_str": 0.1,             # THIS SHOULD SCALE WITH N
-        "I_dir": spec.idir,      
-        "tau_ou": 500.0,
-        "sigma_ou": 0.0,
-        "syn_fail": 0.0,
-        "spon_rel": 0.0,
-        "sigma_eta": spec.sigma_eta,  # THIS SHOULD SCALE WITH N
-        "input_resistance": spec.rin,
-        "ampar_conductance": spec.ampar,
-        "constrict": 1.0,
-        "threshold_active_fraction": 0.1,
+        "sigma_temp": spec.sigma_temp,                      #PARAM VARY NEEDS SCALING 
+        "sigma_input": threshold/2,            #between 0 and threshold
+        "I_str": 0.1,                                                                 # WHAT TO FIX PINN AS (FUNCTION OF NOISE LEVEL?) 
+        "I_dir": spec.idir,                    #PARAM NO SCALE 
+        "syn_fail": 0.0,                       #DONT TOUCH
+        "spon_rel": 0.0,                       #DONT TOUCH
+        "sigma_eta": spec.sigma_eta,                       #PARAM VARY NEEDS SCALING
+        "input_resistance": spec.rin,                      #PARAM VARY NEEDS SCALING
+        "ampar_conductance": spec.ampar,                   #PARAM VARY NEEDS SCALING
+        "constrict": 1.0,                      #DONT TOUCH
+        "threshold_active_fraction": threshold,
     }
 
 
@@ -158,6 +158,7 @@ def run_experiment(spec: RunSpec) -> Path:
         update_strategy,
         progress_callback=progress_logger(spec),
     )
+
 
     setattr(network, "run_id", spec.run_id)
     network.noise_covariance()

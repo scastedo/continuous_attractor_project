@@ -24,27 +24,19 @@ def simulate(
     Returns:
         CANNetwork: The final network instance after simulation.
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info(f"Running on device: {device}")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    network = CANNetwork(device=device, **network_params)
+    network = CANNetwork(**network_params)
+    logging.info(f"Running on device: {network.device}")
+
     network.initialize_weights()
     network.initialize_state()
-    network.record_energy()
+    # network.record_energy()
     network.synaptic_drive = torch.mv(network.weights, network.state)
-
-    # with torch.no_grad():
-    #         eps = torch.randn((), device=network.device)
-    #         network.A = network.A_mu + network.A_rho * (network.A - network.A_mu) + network.A_sigma * eps
-    #         network.A.clamp_(min=0.0)
-    network.A = network.A_mu
-    # network.input_fluctuations.append(network.A)
-
     for gen in range(1, num_generations):
+        update_order = torch.randperm(network.num_neurons, device=network.device)
         if progress_callback and gen % (num_generations // 20) == 0:
             progress_callback(gen)
-
-        update_order = torch.randperm(network.num_neurons, device=network.device)
         noise_samples = None
         if network.sigma_eta > 0:
             noise_samples = torch.randn(network.num_neurons, device=network.device) * network.sigma_eta

@@ -13,8 +13,6 @@ class CANNetwork(nn.Module):
                  sigma_input: float,
                  I_str: float,
                  I_dir: float,
-                 tau_ou: float,
-                 sigma_ou: float,
                  syn_fail: float,
                  spon_rel: float,
                  sigma_eta: float,
@@ -53,8 +51,6 @@ class CANNetwork(nn.Module):
         self.sigma_eta = sigma_eta
         self.input_resistance = input_resistance
         self.ampar_conductance = ampar_conductance
-        self.tau_ou = tau_ou
-        self.sigma_ou = sigma_ou
         self.generation = 0
 
         self.weights = torch.zeros((num_neurons, num_neurons), dtype=torch.float32, device=self.device)
@@ -75,23 +71,23 @@ class CANNetwork(nn.Module):
         self.record_diagnostics = False
 
 
-        self.A_mu   = torch.tensor(self.I_str, device=self.device)   # mean amplitude
-        self.A_rho  = torch.exp(torch.tensor(-1.0/self.tau_ou, device=self.device))
-        self.A_sigma= self.sigma_ou * torch.sqrt(1 - self.A_rho**2)
-        self.A      = self.A_mu.clone()                        # state
-        # Optional: precompute a LUT for the Gaussian over ring distances (faster)
+        self.A  = torch.tensor(self.I_str, device=self.device)   # mean amplitude
+        self.num_neurons_tensor = torch.tensor(self.num_neurons, device=self.device, dtype=torch.long)
+        self.center_index_tensor = torch.tensor(int(self.I_dir * self.num_neurons), device=self.device, dtype=torch.long)
+        self.target_active_tensor = torch.tensor(self.threshold_active_fraction * self.num_neurons, device=self.device)
+        self.inv_num_neurons_tensor = torch.tensor(1.0 / self.num_neurons, device=self.device)
+        
+        
         sigma_idx = self.sigma_input * self.num_neurons                        # width in *index* units
         d0 = torch.arange(0, (self.num_neurons//2)+1, device=self.device, dtype=torch.float32)
         self.bump_LUT = torch.exp(-0.5 * (d0 / sigma_idx)**2)  # size ≈ N/2+1
-        self.num_neurons_tensor = torch.tensor(self.num_neurons, device=self.device, dtype=torch.long)
-        self.center_index_tensor = torch.tensor(int(self.I_dir * self.num_neurons), device=self.device, dtype=torch.long)
         distances = torch.arange(self.num_neurons, device=self.device, dtype=torch.long)
         distances = torch.abs(distances - self.center_index_tensor)
         distances = torch.minimum(distances, self.num_neurons_tensor - distances)
         self.distance_to_center = distances
         self.input_bump_profile = self.bump_LUT[distances]
-        self.target_active_tensor = torch.tensor(self.threshold_active_fraction * self.num_neurons, device=self.device)
-        self.inv_num_neurons_tensor = torch.tensor(1.0 / self.num_neurons, device=self.device)
+    
+
 
     def initialize_weights(self) -> None:
         """
@@ -153,7 +149,7 @@ class CANNetwork(nn.Module):
 
         inhibition = 0.5 * self.constrict / self.num_neurons * (torch.sum(self.state) - self.num_neurons * self.threshold_active_fraction)**2
 
-        return self.input_resistance*(main_term + Iext_term + inhibition)
+        return self.input_resistance*(main_term + Iext_term)+inhibition
 
     def record_energy(self) -> None:
         """

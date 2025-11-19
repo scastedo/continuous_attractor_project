@@ -280,6 +280,17 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
         plt.title("Network State History")
         pdf.savefig(fig1)
         plt.close(fig1)
+
+        # plot activity per generation
+        figx = plt.figure(figsize=(10, 7))
+        avg_activity = np.mean(state_history, axis=1)
+        plt.plot(avg_activity, color='blue')
+        plt.title("Average Network Activity Over Generations")
+        plt.xlabel("Generation")
+        plt.ylabel("Average Activity")
+        plt.grid(True, linestyle='--', alpha=0.6)
+        pdf.savefig(figx)
+        plt.close(figx)
         
         # # Plot 2: Metrics (Combined)
         # fig2, axes = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
