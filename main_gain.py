@@ -82,7 +82,7 @@ def parse_args() -> ExperimentConfig:
     )
     parser.add_argument("--N", "--num-neurons", dest="num_neurons", type=int, default=200,
                         help="Number of neurons")
-    parser.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=500,
+    parser.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=20000,
                         help="Simulation length (generations)")
     parser.add_argument("--ampar", "--ampar-conductance", dest="ampar_vals",
                         type=float, nargs="+", default=[1.0],
@@ -98,11 +98,11 @@ def parse_args() -> ExperimentConfig:
                         help="Sigma_eta value(s) to use for noise")
     parser.add_argument("--tag", type=str, default="",
                         help="Optional run tag appended to output folders/files")
-    parser.add_argument("--outdir", type=Path, default=Path("runs_test4"),
+    parser.add_argument("--outdir", type=Path, default=Path("runs_test_longer"),
                         help="Base output directory")
     parser.add_argument("--loglevel", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         help="Logging level")
-    parser.add_argument("--trials", type=int, default=1,
+    parser.add_argument("--trials", type=int, default=20,
                         help="How many independent repeats to run per parameter combo.")
 
     args = parser.parse_args()
@@ -178,7 +178,7 @@ def run_experiment(spec: RunSpec) -> Path:
 
 def determine_worker_count() -> int:
     cpu_count = os.cpu_count() or 1
-    workers = max(1, math.floor(cpu_count / 1.5))
+    workers = max(1, math.floor(cpu_count / 1.1))
     return workers
 
 
