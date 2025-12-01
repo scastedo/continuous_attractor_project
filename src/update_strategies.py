@@ -114,42 +114,144 @@ class MetropolisUpdateStrategy(UpdateStrategy):
     """
     Update strategy using the Metropolis algorithm.
     """
-    def update(self, network: CANNetwork, rand_index: Optional[torch.Tensor] = None,
-               neuron_noise: Optional[torch.Tensor] = None) -> None:
-        samples = [network.state.clone()]
-        network.total_activity.append(torch.sum(network.state).item())
+    def calculate_energyhere(self, neuron_noise, network: CANNetwork) -> torch.Tensor:
+        interaction_energy = -0.5 * network.ampar_conductance*network.input_resistance*torch.dot(network.state, network.synaptic_drive)
+        external_energy = -torch.dot(
+            network.state,
+            network.input_resistance * (
+                neuron_noise+ network.A * network.input_bump_profile
+            )
+        )
 
-        for _ in range(network.num_updates):
-            proposed_state = network.state.clone()
-            active_indices = (proposed_state == 1).nonzero(as_tuple=True)[0]
-            inactive_indices = (proposed_state == 0).nonzero(as_tuple=True)[0]
+        total_energy = interaction_energy + external_energy 
+        return total_energy
+    
+    def update(self, network: CANNetwork, neuron_noise: Optional[torch.Tensor] = None) -> None:
+        state = network.state
 
-            if len(active_indices) == 0 or len(inactive_indices) == 0:
-                continue  # Skip update if no valid swap exists
+        active_indices = (state == 1).nonzero(as_tuple=True)[0]
+        inactive_indices = (state == 0).nonzero(as_tuple=True)[0]
 
-            idx_active = active_indices[torch.randint(0, len(active_indices), (1,)).item()].item()
-            idx_inactive = inactive_indices[torch.randint(0, len(inactive_indices), (1,)).item()].item()
-            proposed_state[idx_active] = 0.0
-            proposed_state[idx_inactive] = 1.0
+        if active_indices.numel() == 0 or inactive_indices.numel() == 0:
+            return  # nothing to swap
 
-            current_energy = network.calculate_energy()
-            old_state = network.state.clone()
-            network.state = proposed_state.clone()
-            proposed_energy = network.calculate_energy()
-            network.state = old_state
+        # Random active and inactive index
+        i = active_indices[torch.randint(0, active_indices.numel(), (1,), device=network.device)]
+        j = inactive_indices[torch.randint(0, inactive_indices.numel(), (1,), device=network.device)]
 
-            if network.noise > 0:
-                acceptance_prob = min(1, np.exp((current_energy.item() - proposed_energy.item()) / network.noise))
+        # Current energy
+        current_energy = network.calculate_energyhere(neuron_noise, network)
+
+        # Proposed: flip i -> 0, j -> 1
+        old_i = state[i].clone()
+        old_j = state[j].clone()
+        state[i] = 0.0
+        state[j] = 1.0
+
+        proposed_energy = network.calculate_energyhere(neuron_noise, network)
+
+        # Revert for now
+        state[i] = old_i
+        state[j] = old_j
+
+        dE = proposed_energy - current_energy
+
+        if getattr(network, "sigma_temp", 0.0) > 0.0:
+            T = network.sigma_temp
+            acceptance_prob = torch.exp(-dE / T)
+            acceptance_prob = torch.clamp(acceptance_prob, max=torch.tensor(1.0, device=network.device))
+        else:
+            if dE < 0:
+                acceptance_prob = torch.tensor(1.0, device=network.device)
+            elif dE > 0:
+                acceptance_prob = torch.tensor(0.0, device=network.device)
             else:
-                if (current_energy - proposed_energy) < 0:
-                    acceptance_prob = 0
-                elif (current_energy - proposed_energy) > 0:
-                    acceptance_prob = 1
-                else:
-                    acceptance_prob = 0.5
+                acceptance_prob = torch.tensor(0.5, device=network.device)
 
-            if np.random.rand() < acceptance_prob:
-                network.state = proposed_state.clone()
-                samples.append(proposed_state.clone())
+        if torch.rand((), device=network.device) < acceptance_prob:
+            # Accept swap: now actually commit + update synaptic_drive
+            state[i] = 0.0
+            state[j] = 1.0
+
+            # synaptic_drive updates:
+            # i turned off: delta = -1
+            network.synaptic_drive.add_(network.weights[:, i], alpha=-1.0)
+            # j turned on: delta = +1
+            network.synaptic_drive.add_(network.weights[:, j], alpha=+1.0)
+
+
+class MetropolisUpdateStrategy2(UpdateStrategy):
+    """
+    Activity-conserving Metropolis update for CANNetwork.
+
+    Assumes:
+    - network.weights is (num_neurons, num_neurons) and (approximately) symmetric.
+    - network.synaptic_drive is kept in sync with network.state (W @ state).
+    - network.state is a 1D tensor of 0/1 floats.
+    - network.sigma_temp is the Metropolis temperature T.
+    """
+
+    def update(self, network: CANNetwork, neuron_noise: Optional[torch.Tensor] = None) -> None:
+        state = network.state
+
+        # --- 1. Choose a random active and a random inactive neuron ---
+        active_indices = (state == 1).nonzero(as_tuple=True)[0]
+        inactive_indices = (state == 0).nonzero(as_tuple=True)[0]
+
+        if active_indices.numel() == 0 or inactive_indices.numel() == 0:
+            return  # nothing to swap
+
+        # Get scalar indices i, j  (Python ints)
+        idx_i = torch.randint(0, active_indices.numel(), (), device=network.device)
+        idx_j = torch.randint(0, inactive_indices.numel(), (), device=network.device)
+
+        i = active_indices[idx_i].item()
+        j = inactive_indices[idx_j].item()
+
+        # --- 2. Precompute local fields needed for ΔE ---
+        g = network.ampar_conductance
+        R = network.input_resistance
+        A = network.A
+
+        # synaptic_drive = W @ state (assumed already up-to-date)
+        h_i = network.synaptic_drive[i]
+        h_j = network.synaptic_drive[j]
+
+        bump_i = network.input_bump_profile[i]
+        bump_j = network.input_bump_profile[j]
+
+        # here neuron_noise is assumed to be a vector of length num_neurons
+        if neuron_noise is None:
+            b_i = R * (A * bump_i)
+            b_j = R * (A * bump_j)
+        else:
+            b_i = R * (neuron_noise[i] + A * bump_i)
+            b_j = R * (neuron_noise[j] + A * bump_j)
+
+        W_ji = network.weights[j, i]
+        c = g * R
+
+        dE = c * (h_i - h_j + W_ji) + (b_i - b_j)
+
+        # --- 4. Metropolis acceptance ---
+        if getattr(network, "sigma_temp", 0.0) > 0.0:
+            T = network.sigma_temp
+            log_u = torch.log(torch.rand((), device=network.device))
+            accept = (log_u < (-dE / T))
+        else:
+            if dE < 0:
+                accept = True
+            elif dE > 0:
+                accept = False
             else:
-                network.state = samples[-1].clone()
+                accept = bool(torch.randint(0, 2, (), device=network.device))
+
+        # --- 5. Apply swap and update synaptic_drive if accepted ---
+        if accept:
+            state[i] = 0.0
+            state[j] = 1.0
+
+            # Turning i off: Δs_i = -1  => h += - W[:, i]
+            network.synaptic_drive.add_(network.weights[:, i], alpha=-1.0)
+            # Turning j on: Δs_j = +1   => h += + W[:, j]
+            network.synaptic_drive.add_(network.weights[:, j], alpha=+1.0)

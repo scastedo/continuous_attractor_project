@@ -33,18 +33,26 @@ def simulate(
     network.initialize_state()
     # network.record_energy()
     network.synaptic_drive = torch.mv(network.weights, network.state)
+    
+    noise_samples = None
+    if network.sigma_eta > 0:
+        noise_samples = torch.randn(network.num_neurons, device=network.device) * network.sigma_eta
+
     for gen in range(1, num_generations):
         update_order = torch.randperm(network.num_neurons, device=network.device)
         if progress_callback and gen % (num_generations // 20) == 0:
             progress_callback(gen)
-        noise_samples = None
-        if network.sigma_eta > 0:
-            noise_samples = torch.randn(network.num_neurons, device=network.device) * network.sigma_eta
+        # Generate different noise samples every 1000 generations
+        if gen % 200 == 0:
+            noise_samples = None
+            if network.sigma_eta > 0:
+                noise_samples = torch.randn(network.num_neurons, device=network.device) * network.sigma_eta
 
         for step, rand_index in enumerate(update_order):
-            neuron_noise = noise_samples[step] if noise_samples is not None else None
-            update_strategy.update(network, rand_index=rand_index, neuron_noise=neuron_noise)
-        
+            # neuron_noise = noise_samples[step] if noise_samples is not None else None
+            # update_strategy.update(network, rand_index=rand_index, neuron_noise=neuron_noise)
+            update_strategy.update(network,neuron_noise=noise_samples)
+
         network.state_history.append(network.state.clone())
         network.generation += 1
     return network

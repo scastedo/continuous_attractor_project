@@ -71,7 +71,7 @@ class RunSpec:
 
     @property
     def run_id(self) -> str:
-        base = f"g{self.ampar:.3f}_rin{self.rin:.3f}_sigmatemp{self.sigma_temp:.3f}_sigmaeta{self.sigma_eta:.3f}_idir{self.idir:.3f}_trial{self.trial:02d}"
+        base = f"g{self.ampar:.3f}_rin{self.rin:.3f}_sigmatemp{self.sigma_temp:.3f}_sigmaeta{self.sigma_eta:.3f}_idir{self.idir:.6f}_trial{self.trial:02d}"
         return f"{base}_{self.tag}" if self.tag else base
 
 
@@ -80,9 +80,9 @@ def parse_args() -> ExperimentConfig:
         description="Run CAN network with CLI-overridable parameters.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--N", "--num-neurons", dest="num_neurons", type=int, default=200,
+    parser.add_argument("--N", "--num-neurons", dest="num_neurons", type=int, default=500,
                         help="Number of neurons")
-    parser.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=20000,
+    parser.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=10000,
                         help="Simulation length (generations)")
     parser.add_argument("--ampar", "--ampar-conductance", dest="ampar_vals",
                         type=float, nargs="+", default=[1.0],
@@ -92,17 +92,18 @@ def parse_args() -> ExperimentConfig:
                         help="Input resistance value(s)")
     parser.add_argument("--idir", "--input-direction", dest="input_direction", type=float, nargs="+", default=[0.5],
             help="Input direction (neuron index fraction)")
-    parser.add_argument("--sigma-temp", dest="sigma_temp_vals", type=float, nargs="+", default=[0.0],
+    parser.add_argument("--sigma-temp", dest="sigma_temp_vals", type=float, nargs="+", default=[0.01],
                         help="Sigma_temp value(s) to use for noise")
-    parser.add_argument("--sigma-eta", dest="sigma_eta_vals", type=float, nargs="+", default=[0.0],
+    parser.add_argument("--sigma-eta", dest="sigma_eta_vals", type=float, nargs="+", default=[0.01],
                         help="Sigma_eta value(s) to use for noise")
     parser.add_argument("--tag", type=str, default="",
                         help="Optional run tag appended to output folders/files")
-    parser.add_argument("--outdir", type=Path, default=Path("runs_test_longer"),
+    parser.add_argument("--outdir", type=Path, default=Path("/data/scastedo/runs_test_longer_longer"),
+    # parser.add_argument("--outdir", type=Path, default=Path("runs/test_runs"),
                         help="Base output directory")
     parser.add_argument("--loglevel", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         help="Logging level")
-    parser.add_argument("--trials", type=int, default=20,
+    parser.add_argument("--trials", type=int, default=1,
                         help="How many independent repeats to run per parameter combo.")
 
     args = parser.parse_args()
@@ -151,7 +152,7 @@ def progress_logger(spec: RunSpec):
 
 def run_experiment(spec: RunSpec) -> Path:
     logging.info("Starting run %s", spec.run_id)
-    update_strategy = update_strategies.DynamicsUpdateStrategyGain()
+    update_strategy = update_strategies.MetropolisUpdateStrategy2()
     network = simulator.simulate(
         make_network_params(spec),
         spec.num_generations,
@@ -167,10 +168,10 @@ def run_experiment(spec: RunSpec) -> Path:
     run_outdir.mkdir(parents=True, exist_ok=True)
     visualisation.save_state_history(network, run_outdir)
 
-    try:
-        visualisation.create_visualization_report(network, output_dir=run_outdir)
-    except TypeError:
-        visualisation.create_visualization_report(network)
+    # try:
+    #     visualisation.create_visualization_report(network, output_dir=run_outdir)
+    # except TypeError:
+    #     visualisation.create_visualization_report(network)
 
     logging.info("Finished run %s", spec.run_id)
     return run_outdir
@@ -178,7 +179,7 @@ def run_experiment(spec: RunSpec) -> Path:
 
 def determine_worker_count() -> int:
     cpu_count = os.cpu_count() or 1
-    workers = max(1, math.floor(cpu_count / 1.1))
+    workers = max(1, math.floor(cpu_count ))
     return workers
 
 
