@@ -222,11 +222,11 @@ class MetropolisUpdateStrategy2(UpdateStrategy):
 
         # here neuron_noise is assumed to be a vector of length num_neurons
         if neuron_noise is None:
-            b_i = R * (A * bump_i)
-            b_j = R * (A * bump_j)
+            b_i = R*g*(A * bump_i)
+            b_j = R*g*(A * bump_j)
         else:
-            b_i = R * (neuron_noise[i] + A * bump_i)
-            b_j = R * (neuron_noise[j] + A * bump_j)
+            b_i = R * neuron_noise[i] + R*g*(A * bump_i)
+            b_j = R * neuron_noise[j] + R*g*(A * bump_j)
 
         W_ji = network.weights[j, i]
         c = g * R

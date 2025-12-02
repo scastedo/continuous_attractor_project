@@ -80,9 +80,9 @@ def parse_args() -> ExperimentConfig:
         description="Run CAN network with CLI-overridable parameters.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--N", "--num-neurons", dest="num_neurons", type=int, default=500,
+    parser.add_argument("--N", "--num-neurons", dest="num_neurons", type=int, default=400,
                         help="Number of neurons")
-    parser.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=10000,
+    parser.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=30000,
                         help="Simulation length (generations)")
     parser.add_argument("--ampar", "--ampar-conductance", dest="ampar_vals",
                         type=float, nargs="+", default=[1.0],
@@ -98,12 +98,12 @@ def parse_args() -> ExperimentConfig:
                         help="Sigma_eta value(s) to use for noise")
     parser.add_argument("--tag", type=str, default="",
                         help="Optional run tag appended to output folders/files")
-    parser.add_argument("--outdir", type=Path, default=Path("/data/scastedo/runs_test_longer_longer"),
+    parser.add_argument("--outdir", type=Path, default=Path("/data/scastedo/runs_test_fast3"),
     # parser.add_argument("--outdir", type=Path, default=Path("runs/test_runs"),
                         help="Base output directory")
     parser.add_argument("--loglevel", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         help="Logging level")
-    parser.add_argument("--trials", type=int, default=1,
+    parser.add_argument("--trials", type=int, default=20,
                         help="How many independent repeats to run per parameter combo.")
 
     args = parser.parse_args()
@@ -168,10 +168,10 @@ def run_experiment(spec: RunSpec) -> Path:
     run_outdir.mkdir(parents=True, exist_ok=True)
     visualisation.save_state_history(network, run_outdir)
 
-    # try:
-    #     visualisation.create_visualization_report(network, output_dir=run_outdir)
-    # except TypeError:
-    #     visualisation.create_visualization_report(network)
+    try:
+        visualisation.create_visualization_report(network, output_dir=run_outdir)
+    except TypeError:
+        visualisation.create_visualization_report(network)
 
     logging.info("Finished run %s", spec.run_id)
     return run_outdir
