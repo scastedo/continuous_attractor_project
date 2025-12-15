@@ -21,6 +21,8 @@ class ExperimentConfig:
     input_direction: Sequence[float]
     sigma_temp_vals: Sequence[float]
     sigma_eta_vals: Sequence[float]
+    sigma_theta_vals: Sequence[float]
+    block_size: int
     trials: int
     outdir: Path
     tag: str
@@ -37,8 +39,9 @@ class ExperimentConfig:
             self.input_direction,
             self.sigma_temp_vals,
             self.sigma_eta_vals,
+            self.sigma_theta_vals,
         )
-        for ampar, rin, idir, sigma_temp, sigma_eta in combos:
+        for ampar, rin, idir, sigma_temp, sigma_eta, sigma_theta in combos:
             for trial in range(self.trials):
                 yield RunSpec(
                     ampar=ampar,
@@ -52,6 +55,8 @@ class ExperimentConfig:
                     outdir=self.outdir,
                     tag=self.tag,
                     loglevel=self.loglevel_numeric,
+                    sigma_theta=sigma_theta,
+                    block_size=self.block_size,
                 )
 
 
@@ -62,16 +67,18 @@ class RunSpec:
     idir: float
     sigma_temp: float
     sigma_eta: float
+    block_size: int
+    sigma_theta: float
     trial: int
     num_neurons: int
     num_generations: int
     outdir: Path
     tag: str
     loglevel: int
-
+    sigma_theta: float
     @property
     def run_id(self) -> str:
-        base = f"g{self.ampar:.3f}_rin{self.rin:.3f}_sigmatemp{self.sigma_temp:.3f}_sigmaeta{self.sigma_eta:.3f}_idir{self.idir:.6f}_trial{self.trial:02d}"
+        base = f"g{self.ampar:.3f}_rin{self.rin:.3f}_sigmatemp{self.sigma_temp:.3f}_sigmaeta{self.sigma_eta:.3f}_sigma_theta{self.sigma_theta:.3f}_idir{self.idir:.6f}_trial{self.trial:02d}"
         return f"{base}_{self.tag}" if self.tag else base
 
 
@@ -105,6 +112,10 @@ def parse_args() -> ExperimentConfig:
                         help="Logging level")
     parser.add_argument("--trials", type=int, default=20,
                         help="How many independent repeats to run per parameter combo.")
+    parser.add_argument("--block-size", type=int, default=500,dest="block_size",
+                        help="Block size for updates")
+    parser.add_argument("--sigma-theta", type=float, default=[0.01], dest="sigma_theta_vals", nargs="+",
+                        help="Sigma theta value for bump shift noise")
 
     args = parser.parse_args()
     return ExperimentConfig(
@@ -115,6 +126,8 @@ def parse_args() -> ExperimentConfig:
         input_direction=tuple(args.input_direction),
         sigma_temp_vals=tuple(args.sigma_temp_vals),
         sigma_eta_vals=tuple(args.sigma_eta_vals),
+        sigma_theta_vals=tuple(args.sigma_theta_vals),
+        block_size = args.block_size,
         trials=args.trials,
         outdir=args.outdir,
         tag=args.tag,
@@ -139,6 +152,8 @@ def make_network_params(spec: RunSpec) -> dict:
         "ampar_conductance": spec.ampar,                   #PARAM VARY NEEDS SCALING
         "constrict": 1.0,                      #DONT TOUCH
         "threshold_active_fraction": threshold,
+        "block_size": spec.block_size,                        #DONT TOUCH
+        "sigma_theta": spec.sigma_theta * spec.num_neurons,   #PARAM VARY NEEDS SCALING
     }
 
 

@@ -20,6 +20,8 @@ class CANNetwork(nn.Module):
                  ampar_conductance: float,
                  constrict: float,
                  threshold_active_fraction: float,
+                 block_size: int,
+                 sigma_theta: float,
                  device: Optional[torch.device] = None):
         """
         Initialize the CAN network.
@@ -51,6 +53,8 @@ class CANNetwork(nn.Module):
         self.sigma_eta = sigma_eta
         self.input_resistance = input_resistance
         self.ampar_conductance = ampar_conductance
+        self.block_size = block_size
+        self.sigma_theta_steps = sigma_theta
         self.generation = 0
 
         self.weights = torch.zeros((num_neurons, num_neurons), dtype=torch.float32, device=self.device)
@@ -86,7 +90,8 @@ class CANNetwork(nn.Module):
         distances = torch.minimum(distances, self.num_neurons_tensor - distances)
         self.distance_to_center = distances
         self.input_bump_profile = self.bump_LUT[distances]
-    
+        self.base_input_bump_profile = self.input_bump_profile.clone()
+
 
 
     def initialize_weights(self) -> None:

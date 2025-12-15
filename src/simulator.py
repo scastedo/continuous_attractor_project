@@ -1,5 +1,4 @@
-from collections.abc import Callable
-from typing import Optional
+from typing import Callable, Optional
 import torch
 import logging
 from src.network import CANNetwork
@@ -8,51 +7,49 @@ torch.backends.cudnn.benchmark = True
 
 
 def simulate(
-        network_params: dict,
-        num_generations: int,
-        update_strategy: UpdateStrategy,
-        progress_callback: Optional[Callable[[int], None]] = None) -> CANNetwork:
-    """
-    Run the CANN network simulation.
+    network_params: dict,
+    num_generations: int,
+    update_strategy,
+    progress_callback: Optional[Callable[[int], None]] = None,
+) -> "CANNetwork":
+    """Run the CANN simulation for `num_generations` sweeps."""
+    if num_generations <= 0:
+        raise ValueError("num_generations must be > 0")
 
-    Args:
-        network_params (dict): Parameters for network initialization.
-        num_generations (int): Number of simulation generations.
-        runs (int): Number of independent runs.
-        update_strategy (UpdateStrategy): Strategy used for updating network state.
+    net = CANNetwork(**network_params)
+    logging.info("Running on device: %s", net.device)
 
-    Returns:
-        CANNetwork: The final network instance after simulation.
-    """
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    network = CANNetwork(**network_params)
-    logging.info(f"Running on device: {network.device}")
+    net.initialize_weights()
+    net.initialize_state()
+    net.synaptic_drive = net.weights @ net.state
 
-    network.initialize_weights()
-    network.initialize_state()
-    # network.record_energy()
-    network.synaptic_drive = torch.mv(network.weights, network.state)
-    
-    noise_samples = None
-    if network.sigma_eta > 0:
-        noise_samples = torch.randn(network.num_neurons, device=network.device) * network.sigma_eta
+    progress_stride = max(1, num_generations // 20)
+    noise = None
 
-    for gen in range(1, num_generations):
-        update_order = torch.randperm(network.num_neurons, device=network.device)
-        if progress_callback and gen % (num_generations // 20) == 0:
+    for gen in range(num_generations):
+        # progress
+        if progress_callback and gen % progress_stride == 0:
             progress_callback(gen)
-        # Generate different noise samples every 1000 generations
-        if gen % 200 == 0:
-            noise_samples = None
-            if network.sigma_eta > 0:
-                noise_samples = torch.randn(network.num_neurons, device=network.device) * network.sigma_eta
 
-        for step, rand_index in enumerate(update_order):
-            # neuron_noise = noise_samples[step] if noise_samples is not None else None
-            # update_strategy.update(network, rand_index=rand_index, neuron_noise=neuron_noise)
-            update_strategy.update(network,neuron_noise=noise_samples)
+        # refresh block-level randomness
+        if gen % net.block_size == 0:
+            if getattr(net, "sigma_theta_steps", 0.0) > 0.0:
+                # k = int(torch.round(torch.randn((), device=net.device) * net.sigma_theta_steps).item())
+                # net.input_bump_profile = torch.roll(net.base_input_bump_profile, shifts=k)
+                # k is a 0-dim tensor on GPU
+                k = torch.round(torch.randn((), device=net.device) * net.sigma_theta_steps).to(torch.long)
+                idx = (torch.arange(net.num_neurons, device=net.device) - k) % net.num_neurons
+                net.input_bump_profile = net.base_input_bump_profile[idx]
 
-        network.state_history.append(network.state.clone())
-        network.generation += 1
-    return network
+            noise = None
+            if getattr(net, "sigma_eta", 0.0) > 0.0:
+                noise = torch.randn(net.num_neurons, device=net.device) * net.sigma_eta
+
+        # one sweep = N updates in random order
+        for _ in torch.randperm(net.num_neurons, device=net.device):
+            update_strategy.update(net, neuron_noise=noise)
+
+        net.state_history.append(net.state.clone())
+        net.generation += 1
+
+    return net

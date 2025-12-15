@@ -194,6 +194,7 @@ class MetropolisUpdateStrategy2(UpdateStrategy):
     def update(self, network: CANNetwork, neuron_noise: Optional[torch.Tensor] = None) -> None:
         state = network.state
 
+        # randomise the x input normal around 
         # --- 1. Choose a random active and a random inactive neuron ---
         active_indices = (state == 1).nonzero(as_tuple=True)[0]
         inactive_indices = (state == 0).nonzero(as_tuple=True)[0]
