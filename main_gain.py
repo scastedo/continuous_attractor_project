@@ -143,7 +143,7 @@ def make_network_params(spec: RunSpec) -> dict:
         "num_neurons": spec.num_neurons,
         "sigma_temp": spec.sigma_temp,                      #PARAM VARY NEEDS SCALING 
         "sigma_input": threshold/2,            #between 0 and threshold
-        "I_str": 0.1,                                                                 # WHAT TO FIX PINN AS (FUNCTION OF NOISE LEVEL?) 
+        "I_str": 0.05,                                                                 # WHAT TO FIX PINN AS (FUNCTION OF NOISE LEVEL?) 
         "I_dir": spec.idir,                    #PARAM NO SCALE 
         "syn_fail": 0.0,                       #DONT TOUCH
         "spon_rel": 0.0,                       #DONT TOUCH
@@ -153,7 +153,7 @@ def make_network_params(spec: RunSpec) -> dict:
         "constrict": 1.0,                      #DONT TOUCH
         "threshold_active_fraction": threshold,
         "block_size": spec.block_size,                        #DONT TOUCH
-        "sigma_theta": spec.sigma_theta * spec.num_neurons,   #PARAM VARY NEEDS SCALING
+        "sigma_theta": spec.sigma_theta,   #PARAM VARY NEEDS SCALING
     }
 
 

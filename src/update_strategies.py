@@ -191,7 +191,7 @@ class MetropolisUpdateStrategy2(UpdateStrategy):
     - network.sigma_temp is the Metropolis temperature T.
     """
 
-    def update(self, network: CANNetwork, neuron_noise: Optional[torch.Tensor] = None) -> None:
+    def update(self, network: CANNetwork, neuron_noise: Optional[torch.Tensor] = None, x_noise: Optional[torch.Tensor] = None) -> None:
         state = network.state
 
         # randomise the x input normal around 
@@ -221,14 +221,15 @@ class MetropolisUpdateStrategy2(UpdateStrategy):
         bump_i = network.input_bump_profile[i]
         bump_j = network.input_bump_profile[j]
 
-        # here neuron_noise is assumed to be a vector of length num_neurons
-        if neuron_noise is None:
-            b_i = R*g*(A * bump_i)
-            b_j = R*g*(A * bump_j)
-        else:
-            b_i = R * neuron_noise[i] + R*g*(A * bump_i)
-            b_j = R * neuron_noise[j] + R*g*(A * bump_j)
+        x_i = 0.0 if x_noise is None else x_noise[i]
+        x_j = 0.0 if x_noise is None else x_noise[j]
 
+        eta_i = 0.0 if neuron_noise is None else neuron_noise[i]
+        eta_j = 0.0 if neuron_noise is None else neuron_noise[j]
+
+        b_i = R*g*(A*bump_i + x_i) + R*eta_i
+        b_j = R*g*(A*bump_j + x_j) + R*eta_j
+        
         W_ji = network.weights[j, i]
         c = g * R
 
