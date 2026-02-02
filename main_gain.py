@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import itertools
+import json
 import logging
 import math
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -60,6 +62,11 @@ class ExperimentConfig:
                 )
 
 
+def format_float(value: float) -> str:
+    text = f"{value:.6g}"
+    return text.replace("+", "")
+
+
 @dataclass(frozen=True)
 class RunSpec:
     ampar: float
@@ -75,10 +82,18 @@ class RunSpec:
     outdir: Path
     tag: str
     loglevel: int
-    sigma_theta: float
+
     @property
     def run_id(self) -> str:
-        base = f"g{self.ampar:.3f}_rin{self.rin:.3f}_sigmatemp{self.sigma_temp:.3f}_sigmaeta{self.sigma_eta:.3f}_sigma_theta{self.sigma_theta:.3f}_idir{self.idir:.6f}_trial{self.trial:02d}"
+        base = "_".join([
+            f"ampar{format_float(self.ampar)}",
+            f"rin{format_float(self.rin)}",
+            f"sigtemp{format_float(self.sigma_temp)}",
+            f"sigeta{format_float(self.sigma_eta)}",
+            f"sigtheta{format_float(self.sigma_theta)}",
+            f"idir{format_float(self.idir)}",
+            f"trial{self.trial:02d}",
+        ])
         return f"{base}_{self.tag}" if self.tag else base
 
 
@@ -137,13 +152,13 @@ def parse_args() -> ExperimentConfig:
 
 def make_network_params(spec: RunSpec) -> dict:
     """Build the simulator kwargs for a single run."""
-    threshold = 0.1
+    threshold = 0.2
 
     return {
         "num_neurons": spec.num_neurons,
         "sigma_temp": spec.sigma_temp,                      #PARAM VARY NEEDS SCALING 
         "sigma_input": threshold/2,            #between 0 and threshold
-        "I_str": 0.05,                                                                 # WHAT TO FIX PINN AS (FUNCTION OF NOISE LEVEL?) 
+        "I_str": 0.03,                                               # WHAT TO FIX PINN AS (FUNCTION OF NOISE LEVEL?) 
         "I_dir": spec.idir,                    #PARAM NO SCALE 
         "syn_fail": 0.0,                       #DONT TOUCH
         "spon_rel": 0.0,                       #DONT TOUCH
@@ -157,6 +172,34 @@ def make_network_params(spec: RunSpec) -> dict:
     }
 
 
+def save_run_metadata(spec: RunSpec, network_params: dict, run_outdir: Path) -> Path:
+    payload = {
+        "run_id": spec.run_id,
+        "run_dir": str(run_outdir),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "spec": {
+            "ampar": spec.ampar,
+            "rin": spec.rin,
+            "idir": spec.idir,
+            "sigma_temp": spec.sigma_temp,
+            "sigma_eta": spec.sigma_eta,
+            "sigma_theta": spec.sigma_theta,
+            "block_size": spec.block_size,
+            "trial": spec.trial,
+            "num_neurons": spec.num_neurons,
+            "num_generations": spec.num_generations,
+            "outdir": str(spec.outdir),
+            "tag": spec.tag,
+            "loglevel": spec.loglevel,
+        },
+        "network_params": network_params,
+    }
+    metadata_path = run_outdir / "run_metadata.json"
+    with metadata_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+    return metadata_path
+
+
 def progress_logger(spec: RunSpec):
     def _log(gen: int) -> None:
         pct = 100.0 * gen / spec.num_generations
@@ -168,8 +211,9 @@ def progress_logger(spec: RunSpec):
 def run_experiment(spec: RunSpec) -> Path:
     logging.info("Starting run %s", spec.run_id)
     update_strategy = update_strategies.MetropolisUpdateStrategy2()
+    network_params = make_network_params(spec)
     network = simulator.simulate(
-        make_network_params(spec),
+        network_params,
         spec.num_generations,
         update_strategy,
         progress_callback=progress_logger(spec),
@@ -181,6 +225,7 @@ def run_experiment(spec: RunSpec) -> Path:
 
     run_outdir = spec.outdir / spec.run_id
     run_outdir.mkdir(parents=True, exist_ok=True)
+    save_run_metadata(spec, network_params, run_outdir)
     visualisation.save_state_history(network, run_outdir)
 
     try:
