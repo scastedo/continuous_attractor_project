@@ -191,7 +191,7 @@ class MetropolisUpdateStrategy2(UpdateStrategy):
     - network.sigma_temp is the Metropolis temperature T.
     """
 
-    def update(self, network: CANNetwork, neuron_noise: Optional[torch.Tensor] = None, x_noise: Optional[torch.Tensor] = None) -> None:
+    def update(self, network: CANNetwork, neuron_noise: Optional[torch.Tensor] = None, x_noise: Optional[torch.Tensor] = None, synapse_noise: Optional[list] = None) -> None:
         state = network.state
 
         # randomise the x input normal around 
@@ -214,9 +214,33 @@ class MetropolisUpdateStrategy2(UpdateStrategy):
         R = network.input_resistance
         A = network.A
 
+        syn_ok, spon = synapse_noise if synapse_noise is not None else (None, None)
+
+        syn_ok_i = 1.0 if syn_ok is None else syn_ok[i]
+        syn_ok_j = 1.0 if syn_ok is None else syn_ok[j]
+        spon_i   = 0.0 if spon   is None else spon[i]
+        spon_j   = 0.0 if spon   is None else spon[j]
+  
         # synaptic_drive = W @ state (assumed already up-to-date)
+        # h_i = network.synaptic_drive[i]
+        # h_j = network.synaptic_drive[j]
+
+
+        a_i_before = syn_ok_i
+        a_j_before = spon_j
+        a_i_after  = spon_i        # after i: 1->0
+        a_j_after  = syn_ok_j      # after j: 0->1
+
+        da_i = a_i_after - a_i_before
+        da_j = a_j_after - a_j_before
+
         h_i = network.synaptic_drive[i]
         h_j = network.synaptic_drive[j]
+        W_ij = network.weights[i, j]
+        c = network.ampar_conductance * network.input_resistance
+
+
+
 
         bump_i = network.input_bump_profile[i]
         bump_j = network.input_bump_profile[j]
@@ -229,11 +253,15 @@ class MetropolisUpdateStrategy2(UpdateStrategy):
 
         b_i = R*g*(A*bump_i + x_i) + R*eta_i
         b_j = R*g*(A*bump_j + x_j) + R*eta_j
+        # b_i = (A*bump_i + x_i + eta_i)
+        # b_j = (A*bump_j + x_j + eta_j)
         
-        W_ji = network.weights[j, i]
-        c = g * R
+        # W_ji = network.weights[j, i]
+        # c = g * R
 
-        dE = c * (h_i - h_j + W_ji) + (b_i - b_j)
+        # dE = c * (h_i - h_j + W_ji) + (b_i - b_j)
+        dE = -c * (da_i*h_i + da_j*h_j + da_i*da_j*W_ij) - (b_i*da_i + b_j*da_j)
+
 
         # --- 4. Metropolis acceptance ---
         if getattr(network, "sigma_temp", 0.0) > 0.0:
@@ -252,8 +280,5 @@ class MetropolisUpdateStrategy2(UpdateStrategy):
         if accept:
             state[i] = 0.0
             state[j] = 1.0
-
-            # Turning i off: Δs_i = -1  => h += - W[:, i]
-            network.synaptic_drive.add_(network.weights[:, i], alpha=-1.0)
-            # Turning j on: Δs_j = +1   => h += + W[:, j]
-            network.synaptic_drive.add_(network.weights[:, j], alpha=+1.0)
+            network.synaptic_drive.add_(network.weights[:, i], alpha=float(da_i))
+            network.synaptic_drive.add_(network.weights[:, j], alpha=float(da_j))

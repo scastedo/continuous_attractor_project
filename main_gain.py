@@ -127,7 +127,7 @@ def parse_args() -> ExperimentConfig:
                         help="Logging level")
     parser.add_argument("--trials", type=int, default=20,
                         help="How many independent repeats to run per parameter combo.")
-    parser.add_argument("--block-size", type=int, default=500,dest="block_size",
+    parser.add_argument("--block-size", type=int, default=1,dest="block_size",
                         help="Block size for updates")
     parser.add_argument("--sigma-theta", type=float, default=[0.01], dest="sigma_theta_vals", nargs="+",
                         help="Sigma theta value for bump shift noise")
@@ -152,13 +152,13 @@ def parse_args() -> ExperimentConfig:
 
 def make_network_params(spec: RunSpec) -> dict:
     """Build the simulator kwargs for a single run."""
-    threshold = 0.2
+    threshold = 0.1
 
     return {
         "num_neurons": spec.num_neurons,
         "sigma_temp": spec.sigma_temp,                      #PARAM VARY NEEDS SCALING 
         "sigma_input": threshold/2,            #between 0 and threshold
-        "I_str": 0.03,                                               # WHAT TO FIX PINN AS (FUNCTION OF NOISE LEVEL?) 
+        "I_str": 0.01,                                               # WHAT TO FIX PINN AS (FUNCTION OF NOISE LEVEL?) 
         "I_dir": spec.idir,                    #PARAM NO SCALE 
         "syn_fail": 0.0,                       #DONT TOUCH
         "spon_rel": 0.0,                       #DONT TOUCH
