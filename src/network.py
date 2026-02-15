@@ -68,6 +68,18 @@ class CANNetwork(nn.Module):
         self.centres: List[float] = []
         self.total_activity: List[float] = []
         self.state_history: List[torch.Tensor] = []
+        self.state_history_path: Optional[str] = None
+        self.state_history_dtype: str = "float32"
+        self.state_history_shape: Optional[tuple[int, int]] = None
+        self.active_pool: Optional[torch.Tensor] = None
+        self.inactive_pool: Optional[torch.Tensor] = None
+        self.active_pos: Optional[torch.Tensor] = None
+        self.inactive_pos: Optional[torch.Tensor] = None
+        self.collect_perf_counters: bool = False
+        self.sample_calls: int = 0
+        self.accept_calls: int = 0
+        self.pool_swap_calls: int = 0
+        self.debug_validate_pools: bool = False
         self.tuning_curves: dict = {}
         self.correlations: List[float] = []
         self.input_fluctuations: List[float] = []
@@ -90,9 +102,6 @@ class CANNetwork(nn.Module):
         distances = torch.minimum(distances, self.num_neurons_tensor - distances)
         self.distance_to_center = distances
         self.input_bump_profile = self.bump_LUT[distances]
-        self.base_input_bump_profile = self.input_bump_profile.clone()
-
-
 
     def initialize_weights(self) -> None:
         """
@@ -109,17 +118,6 @@ class CANNetwork(nn.Module):
         # self.weights = self.weights - 1*(diff > threshold).float()/self.num_neurons
         self.weights.fill_diagonal_(0)
 
-        # N = self.num_neurons
-        # idx = torch.arange(N, device=self.device)
-        # i = idx[:, None]
-        # j = idx[None, :]
-        # diff = (i - j).abs()
-        # diff = torch.minimum(diff, N - diff)                    # ring distance (indices)
-        # radius = int(self.threshold_active_fraction * N / 2)    # top-hat half-width
-        # W = (diff <= radius).float()
-        # W.fill_diagonal_(0.)
-        # Z = W.sum(dim=1, keepdim=True).clamp_min(1.0)           # neighbors per row
-        # self.weights = W / Z                                     # row-normalized top-hat
 
     def initialize_state(self) -> None:
         """
@@ -136,56 +134,68 @@ class CANNetwork(nn.Module):
         self.state[active_indices] = 1.0
         self.active_count_tensor = self.state.sum()
 
-    def calculate_energy(self) -> torch.Tensor:
-        """
-        Compute the network energy using a modified energy function.
+    def initialize_activity_pools(self) -> None:
+        """Build O(1) sampling pools and inverse-position maps from the current binary state."""
+        if self.state is None:
+            raise ValueError("state is not initialized")
 
-        Returns:
-            torch.Tensor: The calculated energy.
-        """
-        dynamic_weights = self.ampar_conductance*self.weights
-        
-        main_term = -0.5 * torch.dot(self.state, torch.mv(dynamic_weights, self.state))        
-        center = int(round(self.I_dir * self.num_neurons)) % self.num_neurons
-        idx = torch.arange(self.num_neurons, device=self.device)
-        dx = torch.abs(idx - center)
-        dx = torch.min(dx, self.num_neurons - dx).long()
-        Iext_term = -torch.dot(self.state, self.A * self.bump_LUT[dx])
+        active_pool = (self.state > 0.5).nonzero(as_tuple=True)[0].to(dtype=torch.long)
+        inactive_pool = (self.state < 0.5).nonzero(as_tuple=True)[0].to(dtype=torch.long)
 
-        inhibition = 0.5 * self.constrict / self.num_neurons * (torch.sum(self.state) - self.num_neurons * self.threshold_active_fraction)**2
+        self.active_pool = active_pool
+        self.inactive_pool = inactive_pool
 
-        return self.input_resistance*(main_term + Iext_term)+inhibition
+        self.active_pos = torch.full((self.num_neurons,), -1, dtype=torch.long, device=self.device)
+        self.inactive_pos = torch.full((self.num_neurons,), -1, dtype=torch.long, device=self.device)
 
-    def record_energy(self) -> None:
-        """
-        Record the current energy (Lyapunov value) of the network.
-        """
-        energy = self.calculate_energy().item()
-        self.lyapunov.append(energy)
+        if active_pool.numel() > 0:
+            self.active_pos[active_pool] = torch.arange(active_pool.numel(), device=self.device, dtype=torch.long)
+        if inactive_pool.numel() > 0:
+            self.inactive_pos[inactive_pool] = torch.arange(inactive_pool.numel(), device=self.device, dtype=torch.long)
 
-    def locate_centre(self) -> None:
-        """
-        Compute the centre of mass of active neurons (in circular coordinates) and normalized variance.
-        """
-        active_indices = (self.state == 1).nonzero(as_tuple=True)[0]
-        if len(active_indices) == 0:
-            return
+        self.sample_calls = 0
+        self.accept_calls = 0
+        self.pool_swap_calls = 0
 
-        theta = active_indices.float() * 2 * np.pi / self.num_neurons
-        x_coords = torch.cos(theta)
-        y_coords = torch.sin(theta)
-        theta_avg = torch.atan2(-torch.mean(y_coords), -torch.mean(x_coords)) + np.pi
-        centre = (self.num_neurons * theta_avg / (2 * np.pi)) % self.num_neurons
-        self.centres.append(centre.item())
+        if self.debug_validate_pools:
+            self.validate_activity_pools()
 
-        squared_diffs = []
-        for i in active_indices:
-            diff = abs(i.item() - centre.item())
-            circular_diff = min(diff, self.num_neurons - diff) ** 2
-            squared_diffs.append(circular_diff)
-        diff_mean = np.sum(squared_diffs) / len(squared_diffs)
-        norm_factor = (((self.threshold_active_fraction * self.num_neurons) ** 2 - 1) / 12) if (((self.threshold_active_fraction * self.num_neurons) ** 2 - 1) != 0) else 1
-        self.variances.append(diff_mean / norm_factor)
+    def validate_activity_pools(self) -> None:
+        """Debug-only invariant checks for active/inactive pools and inverse maps."""
+        if self.state is None:
+            raise ValueError("state is not initialized")
+        if self.active_pool is None or self.inactive_pool is None:
+            raise ValueError("activity pools are not initialized")
+        if self.active_pos is None or self.inactive_pos is None:
+            raise ValueError("activity position maps are not initialized")
+
+        active_pool = self.active_pool
+        inactive_pool = self.inactive_pool
+        active_pos = self.active_pos
+        inactive_pos = self.inactive_pos
+
+        if active_pool.numel() + inactive_pool.numel() != self.num_neurons:
+            raise ValueError("active/inactive pool sizes do not sum to num_neurons")
+
+        combined = torch.cat((active_pool, inactive_pool))
+        if torch.unique(combined).numel() != self.num_neurons:
+            raise ValueError("activity pools are missing or duplicating neuron indices")
+
+        expected_active = torch.arange(active_pool.numel(), device=self.device, dtype=torch.long)
+        expected_inactive = torch.arange(inactive_pool.numel(), device=self.device, dtype=torch.long)
+        if active_pool.numel() > 0 and not torch.equal(active_pos[active_pool], expected_active):
+            raise ValueError("active_pos map is inconsistent with active_pool")
+        if inactive_pool.numel() > 0 and not torch.equal(inactive_pos[inactive_pool], expected_inactive):
+            raise ValueError("inactive_pos map is inconsistent with inactive_pool")
+        if active_pool.numel() > 0 and torch.any(inactive_pos[active_pool] != -1):
+            raise ValueError("inactive_pos has non-sentinel entries for active neurons")
+        if inactive_pool.numel() > 0 and torch.any(active_pos[inactive_pool] != -1):
+            raise ValueError("active_pos has non-sentinel entries for inactive neurons")
+
+        if int((self.state > 0.5).sum().item()) != active_pool.numel():
+            raise ValueError("active_pool size disagrees with binary state")
+        if int((self.state < 0.5).sum().item()) != inactive_pool.numel():
+            raise ValueError("inactive_pool size disagrees with binary state")
 
     def update_state(self, update_strategy: "UpdateStrategy",
                      rand_index: Optional[torch.Tensor] = None,
@@ -197,21 +207,3 @@ class CANNetwork(nn.Module):
             update_strategy (UpdateStrategy): The update strategy to apply.
         """
         update_strategy.update(self, rand_index=rand_index, neuron_noise=neuron_noise)
-    
-    def noise_covariance(self) -> torch.Tensor:
-        """
-        Calculate the noise covariance matrix of the network states.
-
-        Returns:
-            torch.Tensor: The noise covariance matrix.
-        """
-        histories = torch.stack(self.state_history)  # (generations, neurons)
-        states = histories.to(self.device, dtype=torch.float32)
-        # median_state = torch.median(states, dim=0).values
-        # quantile = torch.quantile(median_state, 1 - self.threshold_active_fraction)
-        # mask = median_state >= quantile
-        # states_sel = states[:, mask]
-        # states = states - states.mean(dim=1, keepdim=True)      # remove pop-mean per time
-        centered = states - states.mean(dim=0, keepdim=True)
-        cov = centered.T @ centered / (states.size(0) - 1)
-        self.covariance_matrix = cov  # stays as torch.Tensor

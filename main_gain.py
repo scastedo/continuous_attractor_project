@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
+import torch
 from src import simulator, update_strategies, visualisation
 
 
@@ -20,11 +21,17 @@ class ExperimentConfig:
     num_generations: int
     ampar_vals: Sequence[float]
     rin_vals: Sequence[float]
+    ampar_rin_pairs: Sequence[tuple[float, float]]
+    pair_mode: str
     input_direction: Sequence[float]
     sigma_temp_vals: Sequence[float]
     sigma_eta_vals: Sequence[float]
     sigma_theta_vals: Sequence[float]
     block_size: int
+    i_str: float
+    threshold: float
+    syn_fail: float
+    spon_rel: float
     trials: int
     outdir: Path
     tag: str
@@ -36,14 +43,13 @@ class ExperimentConfig:
 
     def iter_specs(self) -> Iterable["RunSpec"]:
         combos = itertools.product(
-            self.ampar_vals,
-            self.rin_vals,
+            self.ampar_rin_pairs,
             self.input_direction,
             self.sigma_temp_vals,
             self.sigma_eta_vals,
             self.sigma_theta_vals,
         )
-        for ampar, rin, idir, sigma_temp, sigma_eta, sigma_theta in combos:
+        for (ampar, rin), idir, sigma_temp, sigma_eta, sigma_theta in combos:
             for trial in range(self.trials):
                 yield RunSpec(
                     ampar=ampar,
@@ -59,6 +65,10 @@ class ExperimentConfig:
                     loglevel=self.loglevel_numeric,
                     sigma_theta=sigma_theta,
                     block_size=self.block_size,
+                    i_str=self.i_str,
+                    threshold=self.threshold,
+                    syn_fail=self.syn_fail,
+                    spon_rel=self.spon_rel,
                 )
 
 
@@ -82,6 +92,10 @@ class RunSpec:
     outdir: Path
     tag: str
     loglevel: int
+    i_str: float
+    threshold: float
+    syn_fail: float
+    spon_rel: float
 
     @property
     def run_id(self) -> str:
@@ -102,9 +116,9 @@ def parse_args() -> ExperimentConfig:
         description="Run CAN network with CLI-overridable parameters.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--N", "--num-neurons", dest="num_neurons", type=int, default=400,
+    parser.add_argument("--N", "--num-neurons", dest="num_neurons", type=int, default=250,
                         help="Number of neurons")
-    parser.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=30000,
+    parser.add_argument("--gens", "--num-generations", dest="num_generations", type=int, default=5000,
                         help="Simulation length (generations)")
     parser.add_argument("--ampar", "--ampar-conductance", dest="ampar_vals",
                         type=float, nargs="+", default=[1.0],
@@ -112,6 +126,13 @@ def parse_args() -> ExperimentConfig:
     parser.add_argument("--rin", "--input-resistance", dest="rin_vals",
                         type=float, nargs="+", default=[1.0],
                         help="Input resistance value(s)")
+    parser.add_argument(
+        "--ampar-rin-pairs",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Explicit AMPAR:RIN pairs (e.g., 1:1 0.64:1.27). Overrides Cartesian --ampar x --rin.",
+    )
     parser.add_argument("--idir", "--input-direction", dest="input_direction", type=float, nargs="+", default=[0.5],
             help="Input direction (neuron index fraction)")
     parser.add_argument("--sigma-temp", dest="sigma_temp_vals", type=float, nargs="+", default=[0.01],
@@ -120,29 +141,57 @@ def parse_args() -> ExperimentConfig:
                         help="Sigma_eta value(s) to use for noise")
     parser.add_argument("--tag", type=str, default="",
                         help="Optional run tag appended to output folders/files")
-    parser.add_argument("--outdir", type=Path, default=Path("/data/scastedo/runs_test_fast3"),
+    parser.add_argument("--outdir", type=Path, default=Path("/home/castedo/Desktop"),
     # parser.add_argument("--outdir", type=Path, default=Path("runs/test_runs"),
                         help="Base output directory")
     parser.add_argument("--loglevel", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         help="Logging level")
-    parser.add_argument("--trials", type=int, default=20,
+    parser.add_argument("--trials", type=int, default=1,
                         help="How many independent repeats to run per parameter combo.")
     parser.add_argument("--block-size", type=int, default=1,dest="block_size",
                         help="Block size for updates")
     parser.add_argument("--sigma-theta", type=float, default=[0.01], dest="sigma_theta_vals", nargs="+",
                         help="Sigma theta value for bump shift noise")
+    parser.add_argument("--i-str", type=float, default=0.01,
+                        help="Stimulus strength")
+    parser.add_argument("--threshold", type=float, default=0.1,
+                        help="Fraction of active neurons (0-1)")
+    parser.add_argument("--syn-fail", type=float, default=0.0,
+                        help="Synaptic failure probability (0-1)")
+    parser.add_argument("--spon-rel", type=float, default=0.0,
+                        help="Spontaneous release probability (0-1)")
 
     args = parser.parse_args()
+    if not (0.0 <= args.threshold <= 1.0):
+        parser.error("--threshold must be between 0 and 1.")
+    if not (0.0 <= args.syn_fail <= 1.0):
+        parser.error("--syn-fail must be between 0 and 1.")
+    if not (0.0 <= args.spon_rel <= 1.0):
+        parser.error("--spon-rel must be between 0 and 1.")
+
+    if args.ampar_rin_pairs is not None:
+        ampar_rin_pairs = parse_ampar_rin_pairs(args.ampar_rin_pairs, parser)
+        pair_mode = "explicit_pairs"
+    else:
+        ampar_rin_pairs = tuple(itertools.product(args.ampar_vals, args.rin_vals))
+        pair_mode = "cartesian"
+
     return ExperimentConfig(
         num_neurons=args.num_neurons,
         num_generations=args.num_generations,
         ampar_vals=tuple(args.ampar_vals),
         rin_vals=tuple(args.rin_vals),
+        ampar_rin_pairs=ampar_rin_pairs,
+        pair_mode=pair_mode,
         input_direction=tuple(args.input_direction),
         sigma_temp_vals=tuple(args.sigma_temp_vals),
         sigma_eta_vals=tuple(args.sigma_eta_vals),
         sigma_theta_vals=tuple(args.sigma_theta_vals),
         block_size = args.block_size,
+        i_str=args.i_str,
+        threshold=args.threshold,
+        syn_fail=args.syn_fail,
+        spon_rel=args.spon_rel,
         trials=args.trials,
         outdir=args.outdir,
         tag=args.tag,
@@ -150,23 +199,40 @@ def parse_args() -> ExperimentConfig:
     )
 
 
+def parse_ampar_rin_pairs(tokens: Sequence[str], parser: argparse.ArgumentParser) -> tuple[tuple[float, float], ...]:
+    pairs: list[tuple[float, float]] = []
+    for token in tokens:
+        if token.count(":") != 1:
+            parser.error(f"Invalid AMPAR:RIN pair '{token}'. Expected format '<ampar>:<rin>' (e.g., 1:1).")
+        ampar_str, rin_str = token.split(":", 1)
+        if not ampar_str or not rin_str:
+            parser.error(f"Invalid AMPAR:RIN pair '{token}'. Expected format '<ampar>:<rin>'.")
+        try:
+            ampar = float(ampar_str)
+            rin = float(rin_str)
+        except ValueError:
+            parser.error(f"Invalid AMPAR:RIN pair '{token}'. Both values must be numeric.")
+        pairs.append((ampar, rin))
+    if not pairs:
+        parser.error("--ampar-rin-pairs requires at least one '<ampar>:<rin>' token.")
+    return tuple(pairs)
+
+
 def make_network_params(spec: RunSpec) -> dict:
     """Build the simulator kwargs for a single run."""
-    threshold = 0.1
-
     return {
         "num_neurons": spec.num_neurons,
         "sigma_temp": spec.sigma_temp,                      #PARAM VARY NEEDS SCALING 
-        "sigma_input": threshold/2,            #between 0 and threshold
-        "I_str": 0.01,                                               # WHAT TO FIX PINN AS (FUNCTION OF NOISE LEVEL?) 
+        "sigma_input": spec.threshold / 2,            #between 0 and threshold
+        "I_str": spec.i_str,                                               # WHAT TO FIX PINN AS (FUNCTION OF NOISE LEVEL?) 
         "I_dir": spec.idir,                    #PARAM NO SCALE 
-        "syn_fail": 0.0,                       #DONT TOUCH
-        "spon_rel": 0.0,                       #DONT TOUCH
+        "syn_fail": spec.syn_fail,                       #DONT TOUCH
+        "spon_rel": spec.spon_rel,                       #DONT TOUCH
         "sigma_eta": spec.sigma_eta,                       #PARAM VARY NEEDS SCALING
         "input_resistance": spec.rin,                      #PARAM VARY NEEDS SCALING
         "ampar_conductance": spec.ampar,                   #PARAM VARY NEEDS SCALING
         "constrict": 1.0,                      #DONT TOUCH
-        "threshold_active_fraction": threshold,
+        "threshold_active_fraction": spec.threshold,
         "block_size": spec.block_size,                        #DONT TOUCH
         "sigma_theta": spec.sigma_theta,   #PARAM VARY NEEDS SCALING
     }
@@ -210,22 +276,33 @@ def progress_logger(spec: RunSpec):
 
 def run_experiment(spec: RunSpec) -> Path:
     logging.info("Starting run %s", spec.run_id)
-    update_strategy = update_strategies.MetropolisUpdateStrategy2()
+    update_strategy = update_strategies.MetropolisUpdateStrategy3()
     network_params = make_network_params(spec)
+
+    run_outdir = spec.outdir / spec.run_id
+    run_outdir.mkdir(parents=True, exist_ok=True)
+    state_history_path = run_outdir / "state_history.npy"
+    state_write_chunk = 256
     network = simulator.simulate(
         network_params,
         spec.num_generations,
         update_strategy,
         progress_callback=progress_logger(spec),
+        state_history_path=state_history_path,
+        state_write_chunk=state_write_chunk,
+        keep_state_history_in_memory=False,
     )
 
 
     setattr(network, "run_id", spec.run_id)
-    network.noise_covariance()
-
-    run_outdir = spec.outdir / spec.run_id
-    run_outdir.mkdir(parents=True, exist_ok=True)
-    save_run_metadata(spec, network_params, run_outdir)
+    metadata_network_params = dict(network_params)
+    metadata_network_params.update({
+        "state_history_path": str(state_history_path),
+        "state_history_dtype": getattr(network, "state_history_dtype", "uint8"),
+        "state_write_chunk": state_write_chunk,
+        "streaming_state_history": True,
+    })
+    save_run_metadata(spec, metadata_network_params, run_outdir)
     visualisation.save_state_history(network, run_outdir)
 
     try:
@@ -239,8 +316,17 @@ def run_experiment(spec: RunSpec) -> Path:
 
 def determine_worker_count() -> int:
     cpu_count = os.cpu_count() or 1
-    workers = max(1, math.floor(cpu_count ))
+    workers = max(1, math.floor(cpu_count))
     return workers
+
+
+def worker_init() -> None:
+    """Prevent CPU oversubscription by limiting each worker to one torch thread."""
+    torch.set_num_threads(1)
+    try:
+        torch.set_num_interop_threads(1)
+    except (AttributeError, RuntimeError):
+        pass
 
 
 def main() -> None:
@@ -254,7 +340,13 @@ def main() -> None:
         logging.warning("No parameter combinations to run.")
         return
 
-    workers = determine_worker_count()
+    if config.pair_mode == "explicit_pairs":
+        logging.info("AMPAR/RIN mode: explicit AMPAR:RIN pairs from --ampar-rin-pairs")
+    else:
+        logging.info("AMPAR/RIN mode: Cartesian product from --ampar and --rin")
+    logging.info("Resolved %d AMPAR/RIN pair(s)", len(config.ampar_rin_pairs))
+
+    workers = min(determine_worker_count(), len(specs))
     logging.info("Running %d simulations across %d worker(s)", len(specs), workers)
 
     if workers == 1:
@@ -262,7 +354,7 @@ def main() -> None:
             run_experiment(spec)
         return
 
-    with ProcessPoolExecutor(max_workers=workers) as executor:
+    with ProcessPoolExecutor(max_workers=workers, initializer=worker_init) as executor:
         future_to_spec = {executor.submit(run_experiment, spec): spec for spec in specs}
         for future in as_completed(future_to_spec):
             spec = future_to_spec[future]

@@ -11,6 +11,34 @@ import webbrowser
 
 from src.network import CANNetwork
 
+MAX_PLOT_ROWS = 5000
+
+
+def _load_state_history_array(network: CANNetwork):
+    """Load state history from disk-backed storage when available."""
+    state_history_path = getattr(network, "state_history_path", None)
+    if state_history_path:
+        state_path = Path(state_history_path)
+        if state_path.exists():
+            return np.load(state_path, mmap_mode="r")
+
+    if isinstance(network.state_history, torch.Tensor):
+        return network.state_history.cpu().numpy()
+    if network.state_history:
+        return torch.stack([torch.as_tensor(s) for s in network.state_history]).cpu().numpy()
+    raise ValueError("No state history available in memory or on disk.")
+
+
+def _prepare_state_history_for_plot(state_history, max_rows: int = MAX_PLOT_ROWS):
+    """Downsample only the plotted history rows for large runs."""
+    num_rows = state_history.shape[0]
+    if num_rows <= max_rows:
+        y_axis = np.arange(num_rows)
+        return np.asarray(state_history), y_axis
+    sampled = np.linspace(0, num_rows - 1, num=max_rows, dtype=np.int64)
+    return np.asarray(state_history[sampled]), sampled
+
+
 def create_interactive_report(network: CANNetwork, output_dir: str = "reports") -> str:
     """
     Create an interactive HTML report with Plotly visualizations.
@@ -46,10 +74,12 @@ def create_interactive_report(network: CANNetwork, output_dir: str = "reports") 
         vertical_spacing=0.1
     )
     
-    # 1. Random Data Scatter Plot (Definitive Test)
-    state_history = torch.stack(network.state_history).cpu().numpy()
+    # 1. State history heatmap (downsampled for rendering only if very large)
+    state_history = _load_state_history_array(network)
+    state_history_plot, generation_axis = _prepare_state_history_for_plot(state_history)
     heatmap = go.Heatmap(
-        z=state_history,
+        z=state_history_plot,
+        y=generation_axis,
         colorscale=[
             [0, 'rgba(0,0,0,0)'],  
             [1, 'rgb(210, 145, 188)']  
@@ -272,12 +302,16 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
     with PdfPages(output_file) as pdf:
         # Plot 1: State History
         fig1 = plt.figure(figsize=(10, 8))
-        state_history = torch.stack(network.state_history).cpu().numpy()
+        state_history = _load_state_history_array(network)
+        state_history_plot, _ = _prepare_state_history_for_plot(state_history)
         cmap = colors.ListedColormap(['#FFFFFF', '#D291BC'])
-        plt.imshow(state_history, aspect='auto', interpolation='nearest', cmap=cmap)
+        plt.imshow(state_history_plot, aspect='auto', interpolation='nearest', cmap=cmap)
         plt.xlabel("Neuron Index")
         plt.ylabel("Generation")
-        plt.title("Network State History")
+        if state_history_plot.shape[0] < state_history.shape[0]:
+            plt.title("Network State History (downsampled for plotting)")
+        else:
+            plt.title("Network State History")
         pdf.savefig(fig1)
         plt.close(fig1)
 
@@ -364,7 +398,7 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
 
         # Plot tuning curve of dynamics, where find the average on rate per neuron.
         fig8 = plt.figure(figsize=(10, 7))
-        state_history = torch.stack(network.state_history).cpu().numpy()
+        state_history = _load_state_history_array(network)
         avg_on_rate = np.mean(state_history[30:,:], axis=0)
         #calculate width of curve at half max
         half_max = np.max(avg_on_rate) / 2
@@ -390,34 +424,34 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
         #     plt.close(fig10)
 
                   #Figure of histogram of covariance matrix values flattened
-        if network.covariance_matrix is not None:
-            fig9 = plt.figure(figsize=(10, 7))
-            cov_matrix = network.covariance_matrix.cpu().numpy()
-            upper_tri_indices = np.triu_indices_from(cov_matrix, k=1)
-            cov_values = cov_matrix[upper_tri_indices]
-            plt.hist(cov_values, bins=50, color='orange', edgecolor='black', density=True)
-            plt.axvline(np.mean(cov_values), color='red', linestyle='--', label=f"Mean: {np.mean(cov_values):.5f}")
-            plt.title("Histogram of Covariance Matrix Values")
-            plt.xlabel("Covariance Value")
-            plt.legend()
-            plt.ylabel("Frequency")
-            plt.grid(True, linestyle='--', alpha=0.6)
-            pdf.savefig(fig9)
-            plt.close(fig9)
+        # if network.covariance_matrix is not None:
+        #     fig9 = plt.figure(figsize=(10, 7))
+        #     cov_matrix = network.covariance_matrix.cpu().numpy()
+        #     upper_tri_indices = np.triu_indices_from(cov_matrix, k=1)
+        #     cov_values = cov_matrix[upper_tri_indices]
+        #     plt.hist(cov_values, bins=50, color='orange', edgecolor='black', density=True)
+        #     plt.axvline(np.mean(cov_values), color='red', linestyle='--', label=f"Mean: {np.mean(cov_values):.5f}")
+        #     plt.title("Histogram of Covariance Matrix Values")
+        #     plt.xlabel("Covariance Value")
+        #     plt.legend()
+        #     plt.ylabel("Frequency")
+        #     plt.grid(True, linestyle='--', alpha=0.6)
+        #     pdf.savefig(fig9)
+        #     plt.close(fig9)
         
-        fig11 = plt.figure(figsize=(10, 7))
-        evals, evecs = np.linalg.eigh(cov_matrix)
-        plt.hist(evals, density=True, color='teal', bins = network.num_neurons//3)
-        plt.axvline(np.mean(evals), color='red', linestyle='--', label=f"Mean Eigenvalue: {np.mean(evals):.5f}")
-        #print participation ratio
-        pr = (np.sum(evals)**2) / np.sum(evals**2)
-        plt.title(f"Eigenvalues of Covariance Matrix (Participation Ratio: {pr:.4f}, Mean: {np.mean(evals):.5f})")
-        plt.xlabel("Eigenvalue")
-        plt.ylabel("Density")
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.6)
-        pdf.savefig(fig11)
-        plt.close(fig11)
+        # fig11 = plt.figure(figsize=(10, 7))
+        # evals, evecs = np.linalg.eigh(cov_matrix)
+        # plt.hist(evals, density=True, color='teal', bins = network.num_neurons//3)
+        # plt.axvline(np.mean(evals), color='red', linestyle='--', label=f"Mean Eigenvalue: {np.mean(evals):.5f}")
+        # #print participation ratio
+        # pr = (np.sum(evals)**2) / np.sum(evals**2)
+        # plt.title(f"Eigenvalues of Covariance Matrix (Participation Ratio: {pr:.4f}, Mean: {np.mean(evals):.5f})")
+        # plt.xlabel("Eigenvalue")
+        # plt.ylabel("Density")
+        # plt.legend()
+        # plt.grid(True, linestyle='--', alpha=0.6)
+        # pdf.savefig(fig11)
+        # plt.close(fig11)
         # # correlation matrix histogram
         # fig12 = plt.figure(figsize=(10, 7))
         # diag = np.sqrt(np.diag(cov_matrix))
@@ -584,11 +618,15 @@ def plot_metrics(network: CANNetwork) -> None:
 def plot_state_history(network: CANNetwork) -> None:
     """Plot the network state history."""
     plt.figure("State History")
-    state_history = torch.stack(network.state_history).cpu().numpy()
-    plt.imshow(state_history, aspect='auto', interpolation='nearest')
+    state_history = _load_state_history_array(network)
+    state_history_plot, _ = _prepare_state_history_for_plot(state_history)
+    plt.imshow(state_history_plot, aspect='auto', interpolation='nearest')
     plt.xlabel("Neuron Index")
     plt.ylabel("Generation")
-    plt.title("Network State History")
+    if state_history_plot.shape[0] < state_history.shape[0]:
+        plt.title("Network State History (downsampled for plotting)")
+    else:
+        plt.title("Network State History")
     plt.show()
 
 def view_interactive_report(network: CANNetwork, output_dir: str = "reports") -> None:
@@ -614,6 +652,12 @@ def save_state_history(network: CANNetwork, outdir: Path) -> Path:
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
+    state_history_path = getattr(network, "state_history_path", None)
+    if state_history_path:
+        disk_path = Path(state_history_path)
+        if disk_path.exists():
+            return disk_path
+
     if not network.state_history:
         raise ValueError("network.state_history is empty; run the simulator first.")
 
@@ -621,7 +665,7 @@ def save_state_history(network: CANNetwork, outdir: Path) -> Path:
     state_path = outdir / "state_history.npy"
     np.save(state_path, states)
 
-    if hasattr(network, "covariance_matrix"):
-        torch.save(network.covariance_matrix.cpu(), outdir / "covariance.pt")
+    # if hasattr(network, "covariance_matrix"):
+    #     torch.save(network.covariance_matrix.cpu(), outdir / "covariance.pt")
 
     return state_path
