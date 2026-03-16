@@ -19,6 +19,7 @@ class CANNetwork(nn.Module):
                  input_resistance: float,
                  ampar_conductance: float,
                  constrict: float,
+                 recurrent_width_fraction: float,
                  threshold_active_fraction: float,
                  block_size: int,
                  sigma_theta: float,
@@ -29,11 +30,12 @@ class CANNetwork(nn.Module):
         Args:
             num_neurons (int): Number of neurons.
             noise (float): Noise (temperature) parameter.
-            field_width (float): Receptive field width fraction.
+            sigma_input (float): Input bump width fraction.
             syn_fail (float): Synaptic failure parameter.
             spon_rel (float): Spontaneous release parameter.
             constrict (float): Constriction scaling factor.
-            fraction_active (float): Fraction of neurons active.
+            recurrent_width_fraction (float): Recurrent connectivity width fraction.
+            threshold_active_fraction (float): Fraction of neurons active.
             I_str (array): Stimulus strength.
             I_dir (array): Directional stimulus index.
             num_updates (int): Number of updates per simulation step.
@@ -47,6 +49,7 @@ class CANNetwork(nn.Module):
         self.syn_fail = syn_fail
         self.spon_rel = spon_rel
         self.constrict = constrict
+        self.recurrent_width_fraction = recurrent_width_fraction
         self.threshold_active_fraction = threshold_active_fraction
         self.I_str = I_str
         self.I_dir = I_dir
@@ -80,6 +83,13 @@ class CANNetwork(nn.Module):
         self.accept_calls: int = 0
         self.pool_swap_calls: int = 0
         self.debug_validate_pools: bool = False
+        self.energy_metrics_enabled: bool = False
+        self.energy_metrics_path: Optional[str] = None
+        self.energy_metrics_dtype: str = "float32"
+        self.energy_metrics_shape: Optional[tuple[int, int]] = None
+        self.energy_prop_count_gen: int = 0
+        self.energy_accept_count_gen: int = 0
+        self.energy_sum_abs_total_drive_gen = torch.tensor(0.0, dtype=torch.float32, device=self.device)
         self.tuning_curves: dict = {}
         self.correlations: List[float] = []
         self.input_fluctuations: List[float] = []
@@ -112,11 +122,15 @@ class CANNetwork(nn.Module):
         j_matrix = indices.unsqueeze(0)
         diff = torch.abs(i_matrix - j_matrix)
         diff = torch.min(diff, self.num_neurons - diff)
-        threshold = self.threshold_active_fraction * self.num_neurons / 2
+        threshold = self.recurrent_width_fraction * self.num_neurons / 2
         self.weights = (diff <= threshold).float() / self.num_neurons
         # Inhibitory connections make negative or by enforcing an average fraction of active in dynamics
         # self.weights = self.weights - 1*(diff > threshold).float()/self.num_neurons
         self.weights.fill_diagonal_(0)
+
+        A = torch.randn(self.num_neurons, self.num_neurons, device=self.device)
+        Q, _ = torch.linalg.qr(A)
+        self.weights = Q @ self.weights @ Q.T
 
 
     def initialize_state(self) -> None:
@@ -207,3 +221,9 @@ class CANNetwork(nn.Module):
             update_strategy (UpdateStrategy): The update strategy to apply.
         """
         update_strategy.update(self, rand_index=rand_index, neuron_noise=neuron_noise)
+
+    def reset_energy_counters(self) -> None:
+        """Reset per-generation energy accumulators."""
+        self.energy_prop_count_gen = 0
+        self.energy_accept_count_gen = 0
+        self.energy_sum_abs_total_drive_gen.zero_()

@@ -9,7 +9,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 import torch
 from src import simulator, update_strategies, visualisation
@@ -29,9 +29,11 @@ class ExperimentConfig:
     sigma_theta_vals: Sequence[float]
     block_size: int
     i_str: float
-    threshold: float
+    cann_width_vals: Sequence[float]
+    active_fraction_vals: Sequence[float]
     syn_fail: float
     spon_rel: float
+    save_energy_metrics: bool
     trials: int
     outdir: Path
     tag: str
@@ -48,8 +50,10 @@ class ExperimentConfig:
             self.sigma_temp_vals,
             self.sigma_eta_vals,
             self.sigma_theta_vals,
+            self.cann_width_vals,
+            self.active_fraction_vals,
         )
-        for (ampar, rin), idir, sigma_temp, sigma_eta, sigma_theta in combos:
+        for (ampar, rin), idir, sigma_temp, sigma_eta, sigma_theta, cann_width, active_fraction in combos:
             for trial in range(self.trials):
                 yield RunSpec(
                     ampar=ampar,
@@ -66,9 +70,11 @@ class ExperimentConfig:
                     sigma_theta=sigma_theta,
                     block_size=self.block_size,
                     i_str=self.i_str,
-                    threshold=self.threshold,
+                    cann_width=cann_width,
+                    active_fraction=active_fraction,
                     syn_fail=self.syn_fail,
                     spon_rel=self.spon_rel,
+                    save_energy_metrics=self.save_energy_metrics,
                 )
 
 
@@ -93,9 +99,11 @@ class RunSpec:
     tag: str
     loglevel: int
     i_str: float
-    threshold: float
+    cann_width: float
+    active_fraction: float
     syn_fail: float
     spon_rel: float
+    save_energy_metrics: bool
 
     @property
     def run_id(self) -> str:
@@ -106,12 +114,14 @@ class RunSpec:
             f"sigeta{format_float(self.sigma_eta)}",
             f"sigtheta{format_float(self.sigma_theta)}",
             f"idir{format_float(self.idir)}",
+            f"cwidth{format_float(self.cann_width)}",
+            f"afrac{format_float(self.active_fraction)}",
             f"trial{self.trial:02d}",
         ])
         return f"{base}_{self.tag}" if self.tag else base
 
 
-def parse_args() -> ExperimentConfig:
+def parse_args(argv: Optional[Sequence[str]] = None) -> ExperimentConfig:
     parser = argparse.ArgumentParser(
         description="Run CAN network with CLI-overridable parameters.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -154,16 +164,33 @@ def parse_args() -> ExperimentConfig:
                         help="Sigma theta value for bump shift noise")
     parser.add_argument("--i-str", type=float, default=0.01,
                         help="Stimulus strength")
-    parser.add_argument("--threshold", type=float, default=0.1,
-                        help="Fraction of active neurons (0-1)")
+    parser.add_argument(
+        "--threshold", "--cann-width", dest="cann_width_vals", type=float, nargs="+", default=[0.1],
+        help="Recurrent CANN width fraction value(s) (0-1)"
+    )
+    parser.add_argument(
+        "--active-fraction", dest="active_fraction_vals", type=float, nargs="+", default=None,
+        help="Fraction(s) of active neurons (0-1). Defaults to --threshold values when omitted."
+    )
     parser.add_argument("--syn-fail", type=float, default=0.0,
                         help="Synaptic failure probability (0-1)")
     parser.add_argument("--spon-rel", type=float, default=0.0,
                         help="Spontaneous release probability (0-1)")
+    parser.add_argument(
+        "--save-energy-metrics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Save per-generation energy metrics to energy_metrics.npy (use --no-save-energy-metrics to disable).",
+    )
 
-    args = parser.parse_args()
-    if not (0.0 <= args.threshold <= 1.0):
-        parser.error("--threshold must be between 0 and 1.")
+    args = parser.parse_args(argv)
+    for value in args.cann_width_vals:
+        if not (0.0 <= value <= 1.0):
+            parser.error("--threshold/--cann-width values must be between 0 and 1.")
+    if args.active_fraction_vals is not None:
+        for value in args.active_fraction_vals:
+            if not (0.0 <= value <= 1.0):
+                parser.error("--active-fraction values must be between 0 and 1.")
     if not (0.0 <= args.syn_fail <= 1.0):
         parser.error("--syn-fail must be between 0 and 1.")
     if not (0.0 <= args.spon_rel <= 1.0):
@@ -175,6 +202,11 @@ def parse_args() -> ExperimentConfig:
     else:
         ampar_rin_pairs = tuple(itertools.product(args.ampar_vals, args.rin_vals))
         pair_mode = "cartesian"
+    active_fraction_vals = (
+        tuple(args.active_fraction_vals)
+        if args.active_fraction_vals is not None
+        else tuple(args.cann_width_vals)
+    )
 
     return ExperimentConfig(
         num_neurons=args.num_neurons,
@@ -189,9 +221,11 @@ def parse_args() -> ExperimentConfig:
         sigma_theta_vals=tuple(args.sigma_theta_vals),
         block_size = args.block_size,
         i_str=args.i_str,
-        threshold=args.threshold,
+        cann_width_vals=tuple(args.cann_width_vals),
+        active_fraction_vals=active_fraction_vals,
         syn_fail=args.syn_fail,
         spon_rel=args.spon_rel,
+        save_energy_metrics=args.save_energy_metrics,
         trials=args.trials,
         outdir=args.outdir,
         tag=args.tag,
@@ -223,7 +257,7 @@ def make_network_params(spec: RunSpec) -> dict:
     return {
         "num_neurons": spec.num_neurons,
         "sigma_temp": spec.sigma_temp,                      #PARAM VARY NEEDS SCALING 
-        "sigma_input": spec.threshold / 2,            #between 0 and threshold
+        "sigma_input": spec.cann_width / 2,            #between 0 and recurrent width
         "I_str": spec.i_str,                                               # WHAT TO FIX PINN AS (FUNCTION OF NOISE LEVEL?) 
         "I_dir": spec.idir,                    #PARAM NO SCALE 
         "syn_fail": spec.syn_fail,                       #DONT TOUCH
@@ -232,7 +266,8 @@ def make_network_params(spec: RunSpec) -> dict:
         "input_resistance": spec.rin,                      #PARAM VARY NEEDS SCALING
         "ampar_conductance": spec.ampar,                   #PARAM VARY NEEDS SCALING
         "constrict": 1.0,                      #DONT TOUCH
-        "threshold_active_fraction": spec.threshold,
+        "recurrent_width_fraction": spec.cann_width,
+        "threshold_active_fraction": spec.active_fraction,
         "block_size": spec.block_size,                        #DONT TOUCH
         "sigma_theta": spec.sigma_theta,   #PARAM VARY NEEDS SCALING
     }
@@ -250,6 +285,8 @@ def save_run_metadata(spec: RunSpec, network_params: dict, run_outdir: Path) -> 
             "sigma_temp": spec.sigma_temp,
             "sigma_eta": spec.sigma_eta,
             "sigma_theta": spec.sigma_theta,
+            "cann_width": spec.cann_width,
+            "active_fraction": spec.active_fraction,
             "block_size": spec.block_size,
             "trial": spec.trial,
             "num_neurons": spec.num_neurons,
@@ -283,6 +320,8 @@ def run_experiment(spec: RunSpec) -> Path:
     run_outdir.mkdir(parents=True, exist_ok=True)
     state_history_path = run_outdir / "state_history.npy"
     state_write_chunk = 256
+    energy_metrics_path = run_outdir / "energy_metrics.npy" if spec.save_energy_metrics else None
+    energy_metrics_chunk = 256
     network = simulator.simulate(
         network_params,
         spec.num_generations,
@@ -290,6 +329,8 @@ def run_experiment(spec: RunSpec) -> Path:
         progress_callback=progress_logger(spec),
         state_history_path=state_history_path,
         state_write_chunk=state_write_chunk,
+        energy_metrics_path=energy_metrics_path,
+        energy_metrics_chunk=energy_metrics_chunk,
         keep_state_history_in_memory=False,
     )
 
@@ -302,6 +343,19 @@ def run_experiment(spec: RunSpec) -> Path:
         "state_write_chunk": state_write_chunk,
         "streaming_state_history": True,
     })
+    if spec.save_energy_metrics and energy_metrics_path is not None:
+        metadata_network_params.update({
+            "energy_metrics_enabled": True,
+            "energy_metrics_path": str(energy_metrics_path),
+            "energy_metrics_dtype": getattr(network, "energy_metrics_dtype", "float32"),
+            "energy_metrics_columns": [
+                "proposal_count",
+                "accepted_count",
+                "sum_abs_total_drive",
+                "mean_abs_total_drive",
+            ],
+            "energy_metrics_chunk": energy_metrics_chunk,
+        })
     save_run_metadata(spec, metadata_network_params, run_outdir)
     visualisation.save_state_history(network, run_outdir)
 

@@ -51,6 +51,59 @@ class _StateHistoryWriter:
         self._buffer_count = 0
 
 
+class _EnergyMetricsWriter:
+    """Chunked writer for generation-by-generation energy metrics."""
+
+    NUM_COLS = 4
+
+    def __init__(self, path: Path, num_generations: int, chunk_size: int) -> None:
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be > 0")
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.num_generations = num_generations
+        self.chunk_size = min(chunk_size, num_generations)
+
+        self._mmap = np.lib.format.open_memmap(
+            self.path,
+            mode="w+",
+            dtype=np.float32,
+            shape=(num_generations, self.NUM_COLS),
+        )
+        self._buffer = np.empty((self.chunk_size, self.NUM_COLS), dtype=np.float32)
+        self._buffer_count = 0
+        self._next_row = 0
+
+    def append(self, proposal_count: int, accepted_count: int, sum_abs_total_drive: torch.Tensor) -> None:
+        sum_abs = float(sum_abs_total_drive.item())
+        prop_f = float(proposal_count)
+        accepted_f = float(accepted_count)
+        mean_abs = sum_abs / prop_f if proposal_count > 0 else 0.0
+
+        row = self._buffer[self._buffer_count, :]
+        row[0] = prop_f
+        row[1] = accepted_f
+        row[2] = sum_abs
+        row[3] = mean_abs
+
+        self._buffer_count += 1
+        if self._buffer_count == self.chunk_size:
+            self._flush_buffer()
+
+    def finalize(self) -> None:
+        self._flush_buffer()
+        self._mmap.flush()
+        del self._mmap
+
+    def _flush_buffer(self) -> None:
+        if self._buffer_count == 0:
+            return
+        end = self._next_row + self._buffer_count
+        self._mmap[self._next_row:end, :] = self._buffer[:self._buffer_count, :]
+        self._next_row = end
+        self._buffer_count = 0
+
+
 def simulate(
     network_params: dict,
     num_generations: int,
@@ -58,6 +111,8 @@ def simulate(
     progress_callback: Optional[Callable[[int], None]] = None,
     state_history_path: Optional[Path] = None,
     state_write_chunk: int = 256,
+    energy_metrics_path: Optional[Path] = None,
+    energy_metrics_chunk: int = 256,
     keep_state_history_in_memory: bool = False,
     validate_pools_debug: bool = False,
 ) -> "CANNetwork":
@@ -73,6 +128,8 @@ def simulate(
     net.synaptic_drive = net.weights @ net.state
     net.debug_validate_pools = validate_pools_debug
     net.initialize_activity_pools()
+    net.energy_metrics_enabled = False
+    net.reset_energy_counters()
 
     writer = None
     if state_history_path is not None:
@@ -90,6 +147,21 @@ def simulate(
         net.state_history_dtype = "float32"
         net.state_history_shape = None
     capture_in_memory = keep_state_history_in_memory or writer is None
+
+    energy_writer = None
+    if energy_metrics_path is not None:
+        energy_writer = _EnergyMetricsWriter(
+            path=Path(energy_metrics_path),
+            num_generations=num_generations,
+            chunk_size=energy_metrics_chunk,
+        )
+        net.energy_metrics_path = str(Path(energy_metrics_path))
+        net.energy_metrics_dtype = "float32"
+        net.energy_metrics_shape = (num_generations, _EnergyMetricsWriter.NUM_COLS)
+    else:
+        net.energy_metrics_path = None
+        net.energy_metrics_dtype = "float32"
+        net.energy_metrics_shape = None
 
     progress_stride = max(1, num_generations // 20)
     has_progress = progress_callback is not None
@@ -111,6 +183,10 @@ def simulate(
             idx_j_batch = torch.randint(0, inactive_size, (net.num_neurons,), device=net.device)
             for u in range(net.num_neurons):
                 update_strategy.update(net, idx_i=idx_i_batch[u], idx_j=idx_j_batch[u])
+
+        if energy_writer is not None:
+            net.energy_metrics_enabled = True
+            net.reset_energy_counters()
 
         for gen in range(num_generations):
             if has_progress and gen % progress_stride == 0:
@@ -141,6 +217,13 @@ def simulate(
                     idx_j=idx_j_batch[u],
                 )
 
+            if energy_writer is not None:
+                energy_writer.append(
+                    proposal_count=net.energy_prop_count_gen,
+                    accepted_count=net.energy_accept_count_gen,
+                    sum_abs_total_drive=net.energy_sum_abs_total_drive_gen,
+                )
+                net.reset_energy_counters()
             if writer is not None:
                 writer.append(net.state)
             if capture_in_memory:
@@ -149,5 +232,7 @@ def simulate(
     finally:
         if writer is not None:
             writer.finalize()
+        if energy_writer is not None:
+            energy_writer.finalize()
 
     return net

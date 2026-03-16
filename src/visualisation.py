@@ -400,12 +400,20 @@ def create_visualization_report(network: CANNetwork, output_dir: str = "reports"
         fig8 = plt.figure(figsize=(10, 7))
         state_history = _load_state_history_array(network)
         avg_on_rate = np.mean(state_history[30:,:], axis=0)
-        #calculate width of curve at half max
-        half_max = np.max(avg_on_rate) / 2
-        indices_above_half = np.where(avg_on_rate >= half_max)[0]
-        hwhm = (indices_above_half[-1] - indices_above_half[0]) / 2
+        # Calculate HWHM from peak down to basal firing (not down to zero).
+        basal_rate = float(np.min(avg_on_rate))
+        peak_rate = float(np.max(avg_on_rate))
+        half_level = basal_rate + 0.5 * (peak_rate - basal_rate)
+        indices_above_half = np.where(avg_on_rate >= half_level)[0]
+        if indices_above_half.size > 0:
+            hwhm = (indices_above_half[-1] - indices_above_half[0]) / 2
+        else:
+            hwhm = float("nan")
         plt.plot(avg_on_rate, color='purple')
-        plt.title(f"Average On Rate per Neuron (after 30 generations), HWHM: {hwhm:.4f} neurons")
+        plt.title(
+            f"Average On Rate per Neuron (after 30 generations), "
+            f"HWHM (basal-adjusted): {hwhm:.4f} neurons"
+        )
         plt.xlabel("Neuron Index")
         plt.ylabel("Average On Rate")
         plt.grid(True, linestyle='--', alpha=0.6)

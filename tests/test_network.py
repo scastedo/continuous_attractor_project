@@ -1,3 +1,5 @@
+import math
+from typing import Optional
 import torch
 
 from src.network import CANNetwork
@@ -7,12 +9,15 @@ from src.update_strategies import MetropolisUpdateStrategy3
 def build_network(
     num_neurons: int = 50,
     threshold_active_fraction: float = 0.2,
+    recurrent_width_fraction: Optional[float] = None,
     sigma_temp: float = 0.01,
 ) -> CANNetwork:
+    if recurrent_width_fraction is None:
+        recurrent_width_fraction = threshold_active_fraction
     return CANNetwork(
         num_neurons=num_neurons,
         sigma_temp=sigma_temp,
-        sigma_input=threshold_active_fraction / 2,
+        sigma_input=recurrent_width_fraction / 2,
         I_str=0.01,
         I_dir=0.5,
         syn_fail=0.0,
@@ -21,6 +26,7 @@ def build_network(
         input_resistance=1.0,
         ampar_conductance=1.0,
         constrict=1.0,
+        recurrent_width_fraction=recurrent_width_fraction,
         threshold_active_fraction=threshold_active_fraction,
         block_size=10,
         sigma_theta=0.0,
@@ -97,3 +103,61 @@ def test_pool_index_sampling_is_reasonably_uniform():
     expected = draws / n_active
     max_rel_dev = torch.max(torch.abs(counts.float() - expected)) / expected
     assert float(max_rel_dev) < 0.25, "Pool index sampling looks too skewed."
+
+
+def test_recurrent_width_controls_weights_independently_from_active_fraction():
+    active_fraction = 0.2
+    narrow = build_network(
+        num_neurons=80,
+        threshold_active_fraction=active_fraction,
+        recurrent_width_fraction=0.1,
+    )
+    wide = build_network(
+        num_neurons=80,
+        threshold_active_fraction=active_fraction,
+        recurrent_width_fraction=0.3,
+    )
+    narrow.initialize_weights()
+    wide.initialize_weights()
+
+    assert not torch.equal(narrow.weights, wide.weights), "Changing recurrent width should change connectivity."
+
+
+def test_active_fraction_controls_initial_state_independently_from_recurrent_width():
+    recurrent_width = 0.2
+    low_active = build_network(
+        num_neurons=100,
+        threshold_active_fraction=0.1,
+        recurrent_width_fraction=recurrent_width,
+    )
+    high_active = build_network(
+        num_neurons=100,
+        threshold_active_fraction=0.3,
+        recurrent_width_fraction=recurrent_width,
+    )
+    low_active.initialize_state()
+    high_active.initialize_state()
+
+    assert int(low_active.state.sum().item()) == 10
+    assert int(high_active.state.sum().item()) == 30
+
+
+def test_energy_counters_track_proposals_and_accepts():
+    network = build_network(num_neurons=60, threshold_active_fraction=0.2, sigma_temp=0.01)
+    network.initialize_weights()
+    network.initialize_state()
+    network.synaptic_drive = network.weights @ network.state
+    network.initialize_activity_pools()
+    network.energy_metrics_enabled = True
+    network.reset_energy_counters()
+
+    strategy = MetropolisUpdateStrategy3()
+    updates = 300
+    for _ in range(updates):
+        strategy.update(network)
+
+    assert network.energy_prop_count_gen == updates
+    assert 0 <= network.energy_accept_count_gen <= updates
+    total_drive = float(network.energy_sum_abs_total_drive_gen.item())
+    assert math.isfinite(total_drive)
+    assert total_drive >= 0.0

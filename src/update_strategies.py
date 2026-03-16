@@ -375,6 +375,12 @@ class MetropolisUpdateStrategy3(UpdateStrategy):
         b_j = R*g*(A*bump_j + x_j) + R*eta_j
         # b_i = (A*bump_i + x_i + eta_i)
         # b_j = (A*bump_j + x_j + eta_j)
+
+        if network.energy_metrics_enabled:
+            total_drive_i = R * (g * (a_i_before * h_i + A * bump_i + x_i*A*bump_i) + eta_i)
+            total_drive_j = R * (g * (a_j_before * h_j + A * bump_j + x_j*A*bump_j) + eta_j)
+            network.energy_sum_abs_total_drive_gen += torch.abs(total_drive_i) + torch.abs(total_drive_j)
+            network.energy_prop_count_gen += 1
         
         # W_ji = network.weights[j, i]
         # c = g * R
@@ -405,6 +411,8 @@ class MetropolisUpdateStrategy3(UpdateStrategy):
             state[j] = 1.0
             network.synaptic_drive.add_(network.weights[:, i], alpha=float(da_i))
             network.synaptic_drive.add_(network.weights[:, j], alpha=float(da_j))
+            if network.energy_metrics_enabled:
+                network.energy_accept_count_gen += 1
 
             active_pool[idx_i] = j
             inactive_pool[idx_j] = i

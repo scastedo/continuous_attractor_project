@@ -73,6 +73,7 @@ def main() -> None:
         "input_resistance": 1.0,
         "ampar_conductance": 1.0,
         "constrict": 1.0,
+        "recurrent_width_fraction": 0.1,
         "threshold_active_fraction": 0.1,
         "block_size": args.neurons,
         "sigma_theta": 0.0,
