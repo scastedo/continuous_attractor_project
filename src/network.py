@@ -128,9 +128,9 @@ class CANNetwork(nn.Module):
         # self.weights = self.weights - 1*(diff > threshold).float()/self.num_neurons
         self.weights.fill_diagonal_(0)
 
-        A = torch.randn(self.num_neurons, self.num_neurons, device=self.device)
-        Q, _ = torch.linalg.qr(A)
-        self.weights = Q @ self.weights @ Q.T
+        # A = torch.randn(self.num_neurons, self.num_neurons, device=self.device)
+        # Q, _ = torch.linalg.qr(A)
+        # self.weights = Q @ self.weights @ Q.T
 
 
     def initialize_state(self) -> None:

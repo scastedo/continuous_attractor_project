@@ -169,14 +169,14 @@ def simulate(
     has_syn_fail = net.syn_fail > 0.0
     has_sigma_eta = net.sigma_eta > 0.0
     block_size = net.block_size
-    noise = None
+    noise = None  
     xnoise = None
     syn_ok = None
     spon = None
 
     try:
         # Burn-in period
-        for _ in range(1000):
+        for _ in range(10):
             active_size = net.active_pool.numel()
             inactive_size = net.inactive_pool.numel()
             idx_i_batch = torch.randint(0, active_size, (net.num_neurons,), device=net.device)
@@ -201,7 +201,9 @@ def simulate(
                 syn_ok = torch.bernoulli(torch.full((net.num_neurons,), 1.0 - net.syn_fail, device=net.device))
                 spon = torch.bernoulli(torch.full((net.num_neurons,), net.spon_rel, device=net.device))
             if has_sigma_eta:
-                noise = torch.randn(net.num_neurons, device=net.device) * net.sigma_eta
+                # noise = torch.randn(net.num_neurons, device=net.device) * net.sigma_eta
+                noise = torch.randn(net.num_neurons, device=net.device)
+
             # one sweep = N updates in random order
             active_size = net.active_pool.numel()
             inactive_size = net.inactive_pool.numel()

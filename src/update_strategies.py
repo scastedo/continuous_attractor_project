@@ -371,14 +371,19 @@ class MetropolisUpdateStrategy3(UpdateStrategy):
         eta_i = 0.0 if neuron_noise is None else neuron_noise[i]
         eta_j = 0.0 if neuron_noise is None else neuron_noise[j]
 
+        # alpha = 2.0
+        # eta_i = 0.0 if neuron_noise is None else neuron_noise[i] * (1.0 + alpha * torch.sigmoid(h_i))
+        # eta_j = 0.0 if neuron_noise is None else neuron_noise[j] * (1.0 + alpha * torch.sigmoid(h_j))
+
+
         b_i = R*g*(A*bump_i + x_i) + R*eta_i
         b_j = R*g*(A*bump_j + x_j) + R*eta_j
         # b_i = (A*bump_i + x_i + eta_i)
         # b_j = (A*bump_j + x_j + eta_j)
 
         if network.energy_metrics_enabled:
-            total_drive_i = R * (g * (a_i_before * h_i + A * bump_i + x_i*A*bump_i) + eta_i)
-            total_drive_j = R * (g * (a_j_before * h_j + A * bump_j + x_j*A*bump_j) + eta_j)
+            total_drive_i = R * (g * (a_i_before * h_i + A * bump_i + x_i) + eta_i)
+            total_drive_j = R * (g * (a_j_before * h_j + A * bump_j + x_j) + eta_j)
             network.energy_sum_abs_total_drive_gen += torch.abs(total_drive_i) + torch.abs(total_drive_j)
             network.energy_prop_count_gen += 1
         
@@ -426,3 +431,123 @@ class MetropolisUpdateStrategy3(UpdateStrategy):
                 network.pool_swap_calls += 1
             if network.debug_validate_pools:
                 network.validate_activity_pools()
+
+
+
+class MetropolisUpdateStrategyPadamsey(UpdateStrategy):
+    """
+    Soft Metropolis update for CANNetwork.
+
+    Assumes:
+    - network.weights is (num_neurons, num_neurons) and (approximately) symmetric.
+    - network.synaptic_drive is kept in sync with network.state (W @ state).
+    - network.state is a 1D tensor of 0/1 floats.
+    - network.sigma_temp is the Metropolis temperature T.
+    """
+    def update(
+        self,
+        network: CANNetwork,
+        rand_index: Optional[torch.Tensor] = None,
+        neuron_noise: Optional[torch.Tensor] = None,
+        x_noise: Optional[torch.Tensor] = None,
+        synapse_noise: Optional[list] = None,
+        idx_i: Optional[torch.Tensor] = None,
+        idx_j: Optional[torch.Tensor] = None,
+    ) -> None:
+        state = network.state
+
+        if network.collect_perf_counters:
+            network.sample_calls += 1
+        
+                
+    
+        i = int(torch.randint(0, network.num_neurons, (), device=network.device).item())
+        prev_state = state[i]
+        turn_on = bool(prev_state < 0.5)
+        delta_state = 1.0 if turn_on else -1.0
+        # --- 2. Precompute local fields needed for ΔE ---
+        g = network.ampar_conductance
+        R = network.input_resistance
+        A = network.A
+
+        syn_ok, spon = synapse_noise if synapse_noise is not None else (None, None)
+
+        syn_ok_i = 1.0 if syn_ok is None else syn_ok[i]
+        spon_i   = 0.0 if spon   is None else spon[i]
+
+
+
+        if turn_on:
+            a_i_before = spon_i
+            a_i_after  = syn_ok_i        # after i: 1->0
+        else:
+            a_i_before = syn_ok_i
+            a_i_after  = spon_i        # after i: 1->0
+        da_i = a_i_after - a_i_before
+
+        h_i = network.synaptic_drive[i]
+        bump_i = network.input_bump_profile[i]
+        x_i = 0.0 if x_noise is None else x_noise[i]
+
+
+        # eta_i = 0.0 if neuron_noise is None else neuron_noise[i]
+
+
+        # alpha = 2.0
+        # eta_i = 0.0 if neuron_noise is None else neuron_noise[i] * (1.0 + alpha * torch.sigmoid(h_i))
+
+
+
+        drive_i = R * g * (h_i + A * bump_i + x_i)
+        sigma0 = 0.001
+        u0 = 0.05
+        du = 0.02
+        sigma_i = sigma0 + network.sigma_eta * torch.sigmoid((drive_i - u0) / du)
+        eta_i = 0.0 if neuron_noise is None else neuron_noise[i] * sigma_i
+
+
+
+
+        b_i = R * g * (A * bump_i + x_i) + R * eta_i
+
+
+        if network.energy_metrics_enabled:
+            total_drive_i = R * (g * (a_i_before * h_i + A * bump_i + x_i) + eta_i)
+            network.energy_sum_abs_total_drive_gen += torch.abs(total_drive_i)
+            network.energy_prop_count_gen += 1
+        
+
+        dE_local = -g*R*da_i*h_i - b_i*da_i
+        
+        q = network.active_count_tensor - network.target_active_tensor
+        q_new = q+delta_state
+
+        dE_pen = 0.5*network.constrict*network.inv_num_neurons_tensor*(q_new**2 - q**2)
+        dE = dE_local + dE_pen
+
+        # --- 4. Metropolis acceptance ---
+        if getattr(network, "sigma_temp", 0.0) > 0.0:
+            if dE <= 0:
+                accept = True
+            else:
+                T = network.sigma_temp
+                log_u = torch.log(torch.rand((), device=network.device))
+                accept = (log_u < (-dE / T))
+        else:
+            if dE < 0:
+                accept = True
+            elif dE > 0:
+                accept = False
+            else:
+                accept = bool(torch.randint(0, 2, (), device=network.device))
+
+        # --- 5. Apply swap and update synaptic_drive if accepted ---
+        if accept:
+            state[i] = 1.0 if turn_on else 0.0
+            network.active_count_tensor += delta_state
+            network.synaptic_drive.add_(network.weights[:, i], alpha=float(da_i))
+            if network.energy_metrics_enabled:
+                network.energy_accept_count_gen += 1
+
+            if network.collect_perf_counters:
+                network.accept_calls += 1

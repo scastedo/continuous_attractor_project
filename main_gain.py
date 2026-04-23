@@ -313,7 +313,8 @@ def progress_logger(spec: RunSpec):
 
 def run_experiment(spec: RunSpec) -> Path:
     logging.info("Starting run %s", spec.run_id)
-    update_strategy = update_strategies.MetropolisUpdateStrategy3()
+    # update_strategy = update_strategies.MetropolisUpdateStrategy3()
+    update_strategy = update_strategies.MetropolisUpdateStrategyPadamsey()
     network_params = make_network_params(spec)
 
     run_outdir = spec.outdir / spec.run_id
