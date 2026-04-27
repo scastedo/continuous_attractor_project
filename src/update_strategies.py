@@ -498,14 +498,26 @@ class MetropolisUpdateStrategyPadamsey(UpdateStrategy):
 
 
 
-        drive_i = R * g * (h_i + A * bump_i + x_i)
+        # drive_i = R * g * (h_i + A * bump_i + x_i)
+        # sigma0 = 0.001
+        # u0 = 0.01
+        # du = 0.05
+        # sigma_i = sigma0 + network.sigma_eta * torch.nn.functional.softplus((drive_i - u0) / du)
+        # eta_i = 0.0 if neuron_noise is None else neuron_noise[i] * sigma_i
+
+        drive_all = R * g * (network.synaptic_drive + A * network.input_bump_profile)
+        if x_noise is not None:
+            drive_all = drive_all + R * g * x_noise
+
+        u0 = torch.median(drive_all)
+        q10 = torch.quantile(drive_all, 0.10)
+        q90 = torch.quantile(drive_all, 0.90)
+        du = torch.clamp((q90 - q10) / 4.0, min=1e-4)
+
+        drive_i = drive_all[i]
         sigma0 = 0.001
-        u0 = 0.05
-        du = 0.02
-        sigma_i = sigma0 + network.sigma_eta * torch.sigmoid((drive_i - u0) / du)
+        sigma_i = sigma0 + network.sigma_eta * torch.nn.functional.softplus((drive_i - u0) / du)
         eta_i = 0.0 if neuron_noise is None else neuron_noise[i] * sigma_i
-
-
 
 
         b_i = R * g * (A * bump_i + x_i) + R * eta_i
