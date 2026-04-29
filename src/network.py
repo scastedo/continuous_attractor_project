@@ -127,7 +127,7 @@ class CANNetwork(nn.Module):
         # Inhibitory connections make negative or by enforcing an average fraction of active in dynamics
         # self.weights = self.weights - 1*(diff > threshold).float()/self.num_neurons
         self.weights.fill_diagonal_(0)
-
+        self.weights = self.weights # MULTIPLY BY 2?
         # A = torch.randn(self.num_neurons, self.num_neurons, device=self.device)
         # Q, _ = torch.linalg.qr(A)
         # self.weights = Q @ self.weights @ Q.T
