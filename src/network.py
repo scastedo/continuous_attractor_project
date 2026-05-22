@@ -23,6 +23,7 @@ class CANNetwork(nn.Module):
                  threshold_active_fraction: float,
                  block_size: int,
                  sigma_theta: float,
+                 gain_dynamics: bool = False,
                  device: Optional[torch.device] = None):
         """
         Initialize the CAN network.
@@ -58,6 +59,7 @@ class CANNetwork(nn.Module):
         self.ampar_conductance = ampar_conductance
         self.block_size = block_size
         self.sigma_theta_steps = sigma_theta
+        self.gain_dynamics = bool(gain_dynamics)
         self.generation = 0
 
         self.weights = torch.zeros((num_neurons, num_neurons), dtype=torch.float32, device=self.device)
@@ -97,7 +99,9 @@ class CANNetwork(nn.Module):
         self.record_diagnostics = False
 
 
-        self.A  = torch.tensor(self.I_str, device=self.device)   # mean amplitude
+        self.base_A = torch.tensor(self.I_str, device=self.device)
+        self.A = self.base_A.clone()   # mean amplitude
+        self.current_gain_multiplier = 1.0
         self.num_neurons_tensor = torch.tensor(self.num_neurons, device=self.device, dtype=torch.long)
         self.center_index_tensor = torch.tensor(int(self.I_dir * self.num_neurons), device=self.device, dtype=torch.long)
         self.target_active_tensor = torch.tensor(self.threshold_active_fraction * self.num_neurons, device=self.device)

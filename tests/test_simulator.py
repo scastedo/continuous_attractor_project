@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from src.simulator import simulate
+from src.simulator import gain_dynamics_multiplier, simulate
 from src.update_strategies import MetropolisUpdateStrategy3
 
 
@@ -64,3 +65,27 @@ def test_simulate_skips_energy_metrics_when_disabled(tmp_path: Path) -> None:
     assert network.energy_metrics_path is None
     assert network.energy_metrics_shape is None
     assert list(tmp_path.glob("energy_metrics*.npy")) == []
+
+
+def test_gain_dynamics_control_schedule() -> None:
+    num_generations = 60
+
+    assert gain_dynamics_multiplier(0, num_generations, food_restricted=False) == pytest.approx(1.5)
+    assert gain_dynamics_multiplier(num_generations - 1, num_generations, food_restricted=False) == pytest.approx(1.0)
+    assert 1.0 < gain_dynamics_multiplier(num_generations // 2, num_generations, food_restricted=False) < 1.5
+
+
+def test_gain_dynamics_food_restricted_schedule() -> None:
+    num_generations = 60
+    decay_end_gen = num_generations // 3
+
+    start_control = gain_dynamics_multiplier(0, num_generations, food_restricted=False)
+    start_fr = gain_dynamics_multiplier(0, num_generations, food_restricted=True)
+    decay_end_control = gain_dynamics_multiplier(decay_end_gen, num_generations, food_restricted=False)
+    decay_end_fr = gain_dynamics_multiplier(decay_end_gen, num_generations, food_restricted=True)
+    final_control = gain_dynamics_multiplier(num_generations - 1, num_generations, food_restricted=False)
+    final_fr = gain_dynamics_multiplier(num_generations - 1, num_generations, food_restricted=True)
+
+    assert start_fr / start_control == pytest.approx(1.25)
+    assert decay_end_fr / decay_end_control == pytest.approx(1.10)
+    assert final_fr / final_control == pytest.approx(1.10)

@@ -26,7 +26,11 @@ def _build_spec(active_fraction: float) -> RunSpec:
         active_fraction=active_fraction,
         syn_fail=0.0,
         spon_rel=0.0,
+        p_swap=0.6,
+        db_fr=0.008,
+        gain_dynamics=False,
         save_energy_metrics=False,
+        seed=123,
     )
 
 
@@ -110,6 +114,118 @@ def test_parse_args_supports_disabling_energy_metrics() -> None:
     assert specs[0].save_energy_metrics is False
 
 
+def test_parse_args_derives_distinct_reproducible_run_seeds() -> None:
+    args = [
+        "--idir", "0.5", "0.6",
+        "--trials", "2",
+        "--seed", "42",
+        "--outdir", "/tmp/cann_parse_args_test",
+    ]
+    specs = list(parse_args(args).iter_specs())
+    repeated_specs = list(parse_args(args).iter_specs())
+
+    assert len(specs) == 4
+    assert len({spec.seed for spec in specs}) == 4
+    assert [spec.seed for spec in specs] == [spec.seed for spec in repeated_specs]
+
+
+def test_parse_args_defaults_mixed_padamsey_strategy_params() -> None:
+    config = parse_args(
+        [
+            "--threshold", "0.1",
+            "--outdir", "/tmp/cann_parse_args_test",
+        ]
+    )
+    specs = list(config.iter_specs())
+
+    assert config.p_swap == pytest.approx(0.6)
+    assert config.db_fr == pytest.approx(0.008)
+    assert len(specs) == 1
+    assert specs[0].p_swap == pytest.approx(0.6)
+    assert specs[0].db_fr == pytest.approx(0.008)
+    assert "pswap0.6" in specs[0].run_id
+    assert "dbfr0.008" in specs[0].run_id
+    assert "gaindyn" not in specs[0].run_id
+
+
+def test_parse_args_supports_custom_mixed_padamsey_strategy_params() -> None:
+    config = parse_args(
+        [
+            "--pswap", "0.25",
+            "--db-fr", "0.004",
+            "--outdir", "/tmp/cann_parse_args_test",
+        ]
+    )
+    specs = list(config.iter_specs())
+
+    assert config.p_swap == pytest.approx(0.25)
+    assert config.db_fr == pytest.approx(0.004)
+    assert len(specs) == 1
+    assert specs[0].p_swap == pytest.approx(0.25)
+    assert specs[0].db_fr == pytest.approx(0.004)
+    assert "pswap0.25" in specs[0].run_id
+    assert "dbfr0.004" in specs[0].run_id
+
+
+def test_parse_args_disables_gain_dynamics_by_default() -> None:
+    config = parse_args(
+        [
+            "--outdir", "/tmp/cann_parse_args_test",
+        ]
+    )
+    specs = list(config.iter_specs())
+
+    assert config.gain_dynamics is False
+    assert specs[0].gain_dynamics is False
+    assert "gaindyn" not in specs[0].run_id
+
+
+def test_parse_args_supports_gain_dynamics() -> None:
+    config = parse_args(
+        [
+            "--gain-dynamics",
+            "--outdir", "/tmp/cann_parse_args_test",
+        ]
+    )
+    specs = list(config.iter_specs())
+
+    assert config.gain_dynamics is True
+    assert specs[0].gain_dynamics is True
+    assert "gaindyn1" in specs[0].run_id
+
+
+def test_parse_args_rejects_invalid_pswap() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--pswap", "1.1",
+                "--outdir", "/tmp/cann_parse_args_test",
+            ]
+        )
+
+
+def test_run_seed_changes_when_strategy_params_change() -> None:
+    base_args = [
+        "--seed", "42",
+        "--outdir", "/tmp/cann_parse_args_test",
+    ]
+    default_spec = list(parse_args(base_args).iter_specs())[0]
+    custom_spec = list(parse_args(base_args + ["--pswap", "0.25", "--db-fr", "0.004"]).iter_specs())[0]
+
+    assert default_spec.seed != custom_spec.seed
+
+
+def test_run_seed_changes_when_gain_dynamics_enabled() -> None:
+    base_args = [
+        "--seed", "42",
+        "--outdir", "/tmp/cann_parse_args_test",
+    ]
+    default_spec = list(parse_args(base_args).iter_specs())[0]
+    gain_dynamic_spec = list(parse_args(base_args + ["--gain-dynamics"]).iter_specs())[0]
+
+    assert default_spec.seed != gain_dynamic_spec.seed
+
+
 def test_run_experiment_saves_energy_metadata_when_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     class DummyNetwork:
         state_history_dtype = "uint8"
@@ -138,14 +254,21 @@ def test_run_experiment_saves_energy_metadata_when_enabled(tmp_path: Path, monke
         active_fraction=0.1,
         syn_fail=0.0,
         spon_rel=0.0,
+        p_swap=0.25,
+        db_fr=0.004,
+        gain_dynamics=True,
         save_energy_metrics=True,
+        seed=123,
     )
 
     run_outdir = run_experiment(spec)
     metadata = json.loads((run_outdir / "run_metadata.json").read_text(encoding="utf-8"))
     network_params = metadata["network_params"]
+    strategy_params = metadata["strategy_params"]
+    gain_dynamics_params = metadata["gain_dynamics_params"]
 
     assert network_params["energy_metrics_enabled"] is True
+    assert network_params["gain_dynamics"] is True
     assert "energy_metrics_path" in network_params
     assert network_params["energy_metrics_dtype"] == "float32"
     assert network_params["energy_metrics_columns"] == [
@@ -154,3 +277,14 @@ def test_run_experiment_saves_energy_metadata_when_enabled(tmp_path: Path, monke
         "sum_abs_total_drive",
         "mean_abs_total_drive",
     ]
+    assert strategy_params == {
+        "strategy": "MetropolisUpdateStrategyMixedPadamsey",
+        "p_swap": 0.25,
+        "db_food_restricted": 0.004,
+    }
+    assert gain_dynamics_params["enabled"] is True
+    assert gain_dynamics_params["control_start_multiplier"] == pytest.approx(1.5)
+    assert gain_dynamics_params["control_end_multiplier"] == pytest.approx(1.0)
+    assert gain_dynamics_params["food_restricted_start_control_ratio"] == pytest.approx(1.25)
+    assert gain_dynamics_params["food_restricted_end_control_ratio"] == pytest.approx(1.10)
+    assert gain_dynamics_params["food_restricted_decay_fraction"] == pytest.approx(1.0 / 3.0)

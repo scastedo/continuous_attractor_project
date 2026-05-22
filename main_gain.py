@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import itertools
 import json
 import logging
@@ -33,11 +34,15 @@ class ExperimentConfig:
     active_fraction_vals: Sequence[float]
     syn_fail: float
     spon_rel: float
+    p_swap: float
+    db_fr: float
+    gain_dynamics: bool
     save_energy_metrics: bool
     trials: int
     outdir: Path
     tag: str
     loglevel: str
+    base_seed: int
 
     @property
     def loglevel_numeric(self) -> int:
@@ -55,6 +60,25 @@ class ExperimentConfig:
         )
         for (ampar, rin), idir, sigma_temp, sigma_eta, sigma_theta, cann_width, active_fraction in combos:
             for trial in range(self.trials):
+                spec_seed_parts = [
+                    f"ampar={format_float(ampar)}",
+                    f"rin={format_float(rin)}",
+                    f"sigtemp={format_float(sigma_temp)}",
+                    f"sigeta={format_float(sigma_eta)}",
+                    f"sigtheta={format_float(sigma_theta)}",
+                    f"idir={format_float(idir)}",
+                    f"istr={format_float(self.i_str)}",
+                    f"cwidth={format_float(cann_width)}",
+                    f"afrac={format_float(active_fraction)}",
+                    f"synfail={format_float(self.syn_fail)}",
+                    f"sponrel={format_float(self.spon_rel)}",
+                    f"pswap={format_float(self.p_swap)}",
+                    f"dbfr={format_float(self.db_fr)}",
+                ]
+                if self.gain_dynamics:
+                    spec_seed_parts.append("gaindyn=1")
+                spec_seed_parts.append(f"trial={trial}")
+                spec_seed_key = "|".join(spec_seed_parts)
                 yield RunSpec(
                     ampar=ampar,
                     rin=rin,
@@ -74,7 +98,11 @@ class ExperimentConfig:
                     active_fraction=active_fraction,
                     syn_fail=self.syn_fail,
                     spon_rel=self.spon_rel,
+                    p_swap=self.p_swap,
+                    db_fr=self.db_fr,
+                    gain_dynamics=self.gain_dynamics,
                     save_energy_metrics=self.save_energy_metrics,
+                    seed=derive_run_seed(self.base_seed, spec_seed_key),
                 )
 
 
@@ -103,11 +131,15 @@ class RunSpec:
     active_fraction: float
     syn_fail: float
     spon_rel: float
+    p_swap: float
+    db_fr: float
+    gain_dynamics: bool
     save_energy_metrics: bool
+    seed: int
 
     @property
     def run_id(self) -> str:
-        base = "_".join([
+        run_id_parts = [
             f"ampar{format_float(self.ampar)}",
             f"rin{format_float(self.rin)}",
             f"sigtemp{format_float(self.sigma_temp)}",
@@ -116,8 +148,13 @@ class RunSpec:
             f"idir{format_float(self.idir)}",
             f"cwidth{format_float(self.cann_width)}",
             f"afrac{format_float(self.active_fraction)}",
-            f"trial{self.trial:02d}",
-        ])
+            f"pswap{format_float(self.p_swap)}",
+            f"dbfr{format_float(self.db_fr)}",
+        ]
+        if self.gain_dynamics:
+            run_id_parts.append("gaindyn1")
+        run_id_parts.append(f"trial{self.trial:02d}")
+        base = "_".join(run_id_parts)
         return f"{base}_{self.tag}" if self.tag else base
 
 
@@ -176,11 +213,28 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> ExperimentConfig:
                         help="Synaptic failure probability (0-1)")
     parser.add_argument("--spon-rel", type=float, default=0.0,
                         help="Spontaneous release probability (0-1)")
+    parser.add_argument("--pswap", "--p-swap", dest="p_swap", type=float, default=0.6,
+                        help="Probability of exchange move in MetropolisUpdateStrategyMixedPadamsey (0-1)")
+    parser.add_argument("--db-fr", "--food-restricted-db", dest="db_fr", type=float, default=0.008,
+                        help="Baseline db boost for food-restricted runs (applied when input resistance != 1.0)")
+    parser.add_argument(
+        "--gain-dynamics",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Vary feedforward input gain over recorded generations.",
+    )
     parser.add_argument(
         "--save-energy-metrics",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Save per-generation energy metrics to energy_metrics.npy (use --no-save-energy-metrics to disable).",
+    )
+    parser.add_argument(
+        "--seed",
+        dest="base_seed",
+        type=int,
+        default=0,
+        help="Base seed used to derive one reproducible Torch RNG seed per run.",
     )
 
     args = parser.parse_args(argv)
@@ -195,6 +249,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> ExperimentConfig:
         parser.error("--syn-fail must be between 0 and 1.")
     if not (0.0 <= args.spon_rel <= 1.0):
         parser.error("--spon-rel must be between 0 and 1.")
+    if not (0.0 <= args.p_swap <= 1.0):
+        parser.error("--pswap/--p-swap must be between 0 and 1.")
 
     if args.ampar_rin_pairs is not None:
         ampar_rin_pairs = parse_ampar_rin_pairs(args.ampar_rin_pairs, parser)
@@ -225,11 +281,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> ExperimentConfig:
         active_fraction_vals=active_fraction_vals,
         syn_fail=args.syn_fail,
         spon_rel=args.spon_rel,
+        p_swap=args.p_swap,
+        db_fr=args.db_fr,
+        gain_dynamics=args.gain_dynamics,
         save_energy_metrics=args.save_energy_metrics,
         trials=args.trials,
         outdir=args.outdir,
         tag=args.tag,
         loglevel=args.loglevel,
+        base_seed=args.base_seed,
     )
 
 
@@ -252,6 +312,12 @@ def parse_ampar_rin_pairs(tokens: Sequence[str], parser: argparse.ArgumentParser
     return tuple(pairs)
 
 
+def derive_run_seed(base_seed: int, key: str) -> int:
+    """Derive a stable per-run Torch seed from the base seed and run parameters."""
+    digest = hashlib.blake2b(f"{base_seed}:{key}".encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="big") % (2**63)
+
+
 def make_network_params(spec: RunSpec) -> dict:
     """Build the simulator kwargs for a single run."""
     return {
@@ -270,6 +336,7 @@ def make_network_params(spec: RunSpec) -> dict:
         "threshold_active_fraction": spec.active_fraction,
         "block_size": spec.block_size,                        #DONT TOUCH
         "sigma_theta": spec.sigma_theta,   #PARAM VARY NEEDS SCALING
+        "gain_dynamics": spec.gain_dynamics,
     }
 
 
@@ -288,12 +355,25 @@ def save_run_metadata(spec: RunSpec, network_params: dict, run_outdir: Path) -> 
             "cann_width": spec.cann_width,
             "active_fraction": spec.active_fraction,
             "block_size": spec.block_size,
+            "p_swap": spec.p_swap,
+            "db_fr": spec.db_fr,
+            "gain_dynamics": spec.gain_dynamics,
             "trial": spec.trial,
+            "seed": spec.seed,
             "num_neurons": spec.num_neurons,
             "num_generations": spec.num_generations,
             "outdir": str(spec.outdir),
             "tag": spec.tag,
             "loglevel": spec.loglevel,
+        },
+        "strategy_params": {
+            "strategy": "MetropolisUpdateStrategyMixedPadamsey",
+            "p_swap": spec.p_swap,
+            "db_food_restricted": spec.db_fr,
+        },
+        "gain_dynamics_params": {
+            "enabled": spec.gain_dynamics,
+            **simulator.gain_dynamics_schedule_params(),
         },
         "network_params": network_params,
     }
@@ -313,8 +393,13 @@ def progress_logger(spec: RunSpec):
 
 def run_experiment(spec: RunSpec) -> Path:
     logging.info("Starting run %s", spec.run_id)
+    torch.manual_seed(spec.seed)
     # update_strategy = update_strategies.MetropolisUpdateStrategy3()
-    update_strategy = update_strategies.MetropolisUpdateStrategyPadamsey()
+    # update_strategy = update_strategies.MetropolisUpdateStrategyPadamsey()
+    update_strategy = update_strategies.MetropolisUpdateStrategyMixedPadamsey(
+        p_swap=spec.p_swap,
+        db_food_restricted=spec.db_fr,
+    )
     network_params = make_network_params(spec)
 
     run_outdir = spec.outdir / spec.run_id

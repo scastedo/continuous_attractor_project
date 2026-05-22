@@ -2,25 +2,35 @@
 set -euo pipefail  # safer: exit on error, undefined var, or pipeline error
 
 # Common idir values
-IDIR_VALUES="0.5 0.52 0.6" # 0.55 0.6 0.7 0.8" # 0.575 0.6 0.7 0.9"
+IDIR_VALUES="0.5 0.53" # 0.55 0.6 0.7 0.8" # 0.575 0.6 0.7 0.9"
 # IDIR_VALUES="0.5 0.50025 0.5005 0.501 0.5025 0.505 0.51 0.52 0.55 0.6"
-NEURONS="250"
-GENERATIONS="1000"
+NEURONS="150"
+GENERATIONS="50000"
 # OUTPUT_DIR="/data/scastedo/runs_feb_14_test"
-OUTPUT_DIR="/DATA/scastedo/runs_april_29_test_3"
+OUTPUT_DIR="/DATA/scastedo/runs_may_22_dynamical_1"
 # OUTPUT_DIR="/mnt/data/scastedo/runs_differential_2"
-TRIALS="1"
-SIGMA_ETA_VALUES="0  " #0.005
-SIGMA_TEMP_VALUES="0.05"
-SIGMA_THETA_VALUES="0" #0.01
+TRIALS="500"
+SIGMA_ETA_VALUES="0.01" #This can go higher up to 0.05
+SIGMA_TEMP_VALUES="0.02"
+SIGMA_THETA_VALUES="0.01" #0.01
 BLOCK_SIZE="100"
-I_STR="0.00"
+I_STR="0.01"
 CANN_WIDTH_VALUES="0.1"
 ACTIVE_FRACTIONS="0.1"
 SYN_FAIL="0.0"
 SPON_REL="0.0"
-AMPAR_RIN_PAIRS="1:1 0.71:1.22"
-SAVE_ENERGY_METRICS="0"  # 1 = save energy_metrics.npy, 0 = disable
+AMPAR_RIN_PAIRS="1:1 0.71:1.22 0.71:1"
+PSWAP="0.6"
+FOOD_RESTRICTED_DB="0.006"
+GAIN_DYNAMICS="1"  # 1 = vary input gain over recorded generations, 0 = constant gain
+SAVE_ENERGY_METRICS="1"  # 1 = save energy_metrics.npy, 0 = disable
+BASE_SEED="42"
+
+if [[ "$GAIN_DYNAMICS" == "1" ]]; then
+  GAIN_DYNAMICS_FLAG="--gain-dynamics"
+else
+  GAIN_DYNAMICS_FLAG="--no-gain-dynamics"
+fi
 
 if [[ "$SAVE_ENERGY_METRICS" == "1" ]]; then
   ENERGY_METRICS_FLAG="--save-energy-metrics"
@@ -45,5 +55,9 @@ python main_gain.py \
   --active-fraction $ACTIVE_FRACTIONS \
   --syn-fail "$SYN_FAIL" \
   --spon-rel "$SPON_REL" \
+  --pswap "$PSWAP" \
+  --db-fr "$FOOD_RESTRICTED_DB" \
+  "$GAIN_DYNAMICS_FLAG" \
+  --seed "$BASE_SEED" \
   "$ENERGY_METRICS_FLAG" \
   > output.log 2>&1

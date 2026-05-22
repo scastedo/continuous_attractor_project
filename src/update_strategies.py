@@ -487,7 +487,8 @@ class MetropolisUpdateStrategyPadamsey(UpdateStrategy):
         u_centered = u - u.mean() #Input centering inhibition
 
 
-        b = -0.08
+        b = network.sigma_temp*np.log(network.threshold_active_fraction / (1.0 - network.threshold_active_fraction))
+        # b = -network.constrict*(network.active_count_tensor - network.target_active_tensor) * network.inv_num_neurons_tensor
         if network.input_resistance !=1.0:
             db = 0.005
         else:
@@ -534,3 +535,159 @@ class MetropolisUpdateStrategyPadamsey(UpdateStrategy):
 
             if network.collect_perf_counters:
                 network.accept_calls += 1
+
+
+class MetropolisUpdateStrategyMixedPadamsey(UpdateStrategy):
+    """
+    Mixed Metropolis update:
+
+    - exchange move: 1,0 -> 0,1  ; helps bump diffusion
+    - single flip:   s_i -> 1-s_i ; allows activity fluctuations
+
+    Uses centered-input field:
+        u = W @ s + x
+        H_i = c * (u_i - mean(u)) + b + db + eta_i
+    """
+
+    def __init__(self, p_swap: float = 0.6, db_food_restricted: float = 0.008) -> None:
+        if not 0.0 <= p_swap <= 1.0:
+            raise ValueError("p_swap must be between 0 and 1.")
+        self.p_swap = float(p_swap)
+        self.db_food_restricted = float(db_food_restricted)
+
+    def update(
+        self,
+        network: CANNetwork,
+        rand_index: Optional[torch.Tensor] = None,
+        neuron_noise: Optional[torch.Tensor] = None,
+        x_noise: Optional[torch.Tensor] = None,
+        synapse_noise: Optional[list] = None,
+        idx_i: Optional[torch.Tensor] = None,
+        idx_j: Optional[torch.Tensor] = None,
+    ) -> None:
+        state = network.state
+        device = network.device
+        T = network.sigma_temp
+
+        if network.collect_perf_counters:
+            network.sample_calls += 1
+
+        # Main knob: probability of exchange move.
+        # Larger = better bump diffusion, less activity fluctuation.
+        p_swap = self.p_swap
+
+        # Common input and field ingredients.
+        x = network.A * network.input_bump_profile
+        if x_noise is not None:
+            x = x + x_noise
+
+        u = network.synaptic_drive + x
+        u_c = u - u.mean()
+
+        c = network.ampar_conductance * network.input_resistance
+
+        # Baseline bias sets mean activity for single flips.
+        f = float(network.threshold_active_fraction)
+        b = T * torch.log(torch.tensor(f / (1.0 - f), device=device))
+
+        # Small FR boost, if desired.
+        db = self.db_food_restricted if network.input_resistance != 1.0 else 0.0
+
+        sigma0 = 0.0
+        noise_gain = network.input_resistance
+
+        def local_field(k):
+            sigma_k = (
+                sigma0
+                + noise_gain
+                * network.sigma_eta
+                * T
+                * torch.nn.functional.softplus(u[k] / T)
+            )
+
+            if neuron_noise is None:
+                eta_k = sigma_k * torch.randn((), device=device)
+            else:
+                eta_k = sigma_k * neuron_noise[k]
+            
+
+            return c * u_c[k] + b + db + eta_k
+
+        def accept_metropolis(dE):
+            if T > 0:
+                if dE <= 0:
+                    return True
+                return torch.log(torch.rand((), device=device)) < (-dE / T)
+            else:
+                return bool(dE < 0)
+
+        # ------------------------------------------------------------
+        # 1) Exchange move: choose active i and inactive j.
+        # ------------------------------------------------------------
+        if torch.rand((), device=device) < p_swap:
+            active = torch.nonzero(state > 0.5, as_tuple=False).flatten()
+            inactive = torch.nonzero(state < 0.5, as_tuple=False).flatten()
+
+            if active.numel() == 0 or inactive.numel() == 0:
+                return
+
+            i = active[torch.randint(0, active.numel(), (), device=device)]
+            j = inactive[torch.randint(0, inactive.numel(), (), device=device)]
+
+            H_i = local_field(i)
+            H_j = local_field(j)
+
+            if network.energy_metrics_enabled:
+                network.energy_sum_abs_total_drive_gen += torch.abs(c * u_c[i]) + torch.abs(c * u_c[j])
+
+            # Swap: i: 1->0, j: 0->1
+            # dE = H_i - H_j, plus pair correction.
+            dE = H_i - H_j + c * network.weights[i, j]
+
+            if accept_metropolis(dE):
+                state[i] = 0.0
+                state[j] = 1.0
+
+                network.synaptic_drive.add_(network.weights[:, i], alpha=-1.0)
+                network.synaptic_drive.add_(network.weights[:, j], alpha=1.0)
+
+                if network.collect_perf_counters:
+                    network.accept_calls += 1
+
+                if network.energy_metrics_enabled:
+                    network.energy_accept_count_gen += 1
+
+        # ------------------------------------------------------------
+        # 2) Single flip move: choose any neuron.
+        # ------------------------------------------------------------
+        else:
+            i = torch.randint(0, network.num_neurons, (), device=device)
+
+            old = state[i]
+            new = 1.0 - old
+            delta = new - old
+
+            H_i = local_field(i)
+
+            if network.energy_metrics_enabled:
+                network.energy_sum_abs_total_drive_gen += torch.abs(c * u_c[i])
+
+            # Flip energy.
+            dE = -delta * H_i
+
+            if accept_metropolis(dE):
+                state[i] = new
+                network.active_count_tensor += delta
+                network.synaptic_drive.add_(network.weights[:, i], alpha=float(delta.item()))
+
+                if network.collect_perf_counters:
+                    network.accept_calls += 1
+
+                if network.energy_metrics_enabled:
+                    network.energy_accept_count_gen += 1
+
+        if network.energy_metrics_enabled:
+            network.energy_prop_count_gen += 1
+
+        if network.record_diagnostics:
+            network.total_activity.append(float(network.state.mean().detach().cpu()))

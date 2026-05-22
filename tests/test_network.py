@@ -3,7 +3,7 @@ from typing import Optional
 import torch
 
 from src.network import CANNetwork
-from src.update_strategies import MetropolisUpdateStrategy3
+from src.update_strategies import MetropolisUpdateStrategy3, MetropolisUpdateStrategyMixedPadamsey
 
 
 def build_network(
@@ -161,3 +161,24 @@ def test_energy_counters_track_proposals_and_accepts():
     total_drive = float(network.energy_sum_abs_total_drive_gen.item())
     assert math.isfinite(total_drive)
     assert total_drive >= 0.0
+
+
+def test_mixed_padamsey_energy_counters_record_local_drive():
+    network = build_network(num_neurons=60, threshold_active_fraction=0.2, sigma_temp=0.01)
+    network.initialize_weights()
+    network.initialize_state()
+    network.synaptic_drive = network.weights @ network.state
+    network.initialize_activity_pools()
+    network.energy_metrics_enabled = True
+    network.reset_energy_counters()
+
+    strategy = MetropolisUpdateStrategyMixedPadamsey(p_swap=0.6)
+    updates = 300
+    for _ in range(updates):
+        strategy.update(network)
+
+    assert network.energy_prop_count_gen == updates
+    assert 0 <= network.energy_accept_count_gen <= updates
+    total_drive = float(network.energy_sum_abs_total_drive_gen.item())
+    assert math.isfinite(total_drive)
+    assert total_drive > 0.0

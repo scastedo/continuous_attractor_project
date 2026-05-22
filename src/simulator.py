@@ -7,6 +7,58 @@ from src.network import CANNetwork
 from src.update_strategies import UpdateStrategy
 torch.backends.cudnn.benchmark = True
 
+GAIN_DYNAMICS_CONTROL_START_GAIN = 0.0
+GAIN_DYNAMICS_CONTROL_PEAK_GAIN = 0.012
+GAIN_DYNAMICS_CONTROL_END_GAIN = 0.009
+GAIN_DYNAMICS_PEAK_FRACTION = 3.0 / 20.0
+
+GAIN_DYNAMICS_FR_START_CONTROL_RATIO = 1.25
+GAIN_DYNAMICS_FR_END_CONTROL_RATIO = 1.0
+GAIN_DYNAMICS_FR_RATIO_TAU_FRACTION = 0.05
+
+def gain_dynamics_schedule_params() -> dict:
+    return {
+        "control_start_gain": GAIN_DYNAMICS_CONTROL_START_GAIN,
+        "control_peak_gain": GAIN_DYNAMICS_CONTROL_PEAK_GAIN,
+        "control_end_gain": GAIN_DYNAMICS_CONTROL_END_GAIN,
+        "peak_fraction": GAIN_DYNAMICS_PEAK_FRACTION,
+        "food_restricted_start_control_ratio": GAIN_DYNAMICS_FR_START_CONTROL_RATIO,
+        "food_restricted_end_control_ratio": GAIN_DYNAMICS_FR_END_CONTROL_RATIO,
+        "food_restricted_ratio_tau_fraction": GAIN_DYNAMICS_FR_RATIO_TAU_FRACTION,
+    }
+def gain_dynamics_gain(gen: int, num_generations: int, food_restricted: bool) -> float:
+    """Absolute input gain for one recorded generation."""
+    if num_generations <= 0:
+        raise ValueError("num_generations must be > 0")
+    if not 0 <= gen < num_generations:
+        raise ValueError("gen must be in [0, num_generations)")
+
+    progress = gen / (num_generations - 1) if num_generations > 1 else 0.0
+    peak_fraction = GAIN_DYNAMICS_PEAK_FRACTION
+
+    if progress <= peak_fraction:
+        phase_progress = progress / peak_fraction
+        control_gain = (
+            GAIN_DYNAMICS_CONTROL_START_GAIN
+            + (GAIN_DYNAMICS_CONTROL_PEAK_GAIN - GAIN_DYNAMICS_CONTROL_START_GAIN)
+            * phase_progress
+        )
+        fr_ratio = GAIN_DYNAMICS_FR_START_CONTROL_RATIO
+    else:
+        phase_progress = (progress - peak_fraction) / (1.0 - peak_fraction)
+        control_gain = (
+            GAIN_DYNAMICS_CONTROL_PEAK_GAIN
+            + (GAIN_DYNAMICS_CONTROL_END_GAIN - GAIN_DYNAMICS_CONTROL_PEAK_GAIN)
+            * phase_progress
+        )
+
+        after_peak_progress = progress - peak_fraction
+        fr_ratio = GAIN_DYNAMICS_FR_END_CONTROL_RATIO + (
+            GAIN_DYNAMICS_FR_START_CONTROL_RATIO - GAIN_DYNAMICS_FR_END_CONTROL_RATIO
+        ) * np.exp(-after_peak_progress / GAIN_DYNAMICS_FR_RATIO_TAU_FRACTION)
+
+    return control_gain * fr_ratio if food_restricted else control_gain
+
 
 class _StateHistoryWriter:
     """Chunked writer for generation-by-generation state snapshots."""
@@ -176,7 +228,7 @@ def simulate(
 
     try:
         # Burn-in period
-        for _ in range(10):
+        for _ in range(1000):
             active_size = net.active_pool.numel()
             inactive_size = net.inactive_pool.numel()
             idx_i_batch = torch.randint(0, active_size, (net.num_neurons,), device=net.device)
@@ -189,6 +241,12 @@ def simulate(
             net.reset_energy_counters()
 
         for gen in range(num_generations):
+            if net.gain_dynamics:
+                food_restricted = net.input_resistance != 1.0
+                gain = gain_dynamics_gain(gen, num_generations, food_restricted)
+                net.current_gain_multiplier = gain / net.base_A if net.base_A != 0.0 else 0.0
+                net.A = gain
+
             if has_progress and gen % progress_stride == 0:
                 progress_callback(gen)
             # refresh block-level randomness
